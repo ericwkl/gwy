@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.00</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.01</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -4761,7 +4761,7 @@ function addPush(type,title,content,fetchInfo){
   if(DB.pushHistory.length>100) DB.pushHistory=DB.pushHistory.slice(-100);
   saveDB();
 }
-/* 强制重新抓取：清除今天的推送标记和历史 + 重新生成早间推送 */
+/* 强制重新抓取：清除今天的推送标记和历史 + 重新生成早间和晚间推送 */
 async function forceRefreshPush(){
   // 清除今天的推送标记，允许重新生成
   const today=todayStr();
@@ -4780,6 +4780,11 @@ async function forceRefreshPush(){
   toast('正在重新生成推送...');
   try{
     await generateMorningPush();
+    // 如果当前时间已过22点，也重新生成晚间推送
+    const h=new Date().getHours();
+    if(h>=22){
+      generateNightPush();
+    }
     toast('推送已重新生成');
   }catch(e){
     console.error('forceRefreshPush error:',e);
