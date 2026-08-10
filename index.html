@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.1.89</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.1.98</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -829,8 +829,8 @@ function viewMistakeDetail(id){
     ${m.note?`<div class="detail-block"><div class="detail-label">备注</div>${escapeHtml(m.note)}</div>`:''}
     ${m.photos&&m.photos.length?`<div class="detail-block"><div class="detail-label">📷 截图</div><div class="photos">${m.photos.map(p=>`<img src="${b64Url(p)}" onerror="this.onerror=null;this.src='${p}'" onclick="previewImg(this.src)">`).join('')}</div></div>`:''}
     <div class="modal-foot">
-      ${!st.done?`<button class="btn btn-sm" style="flex:1;background:var(--primary);color:#fff;" onclick="ebbMistakeAction('${m.id}','master');nextMistakeDetail()">✅ 已掌握</button>
-      <button class="btn btn-sm btn-outline" style="flex:1;" onclick="ebbMistakeAction('${m.id}','again');nextMistakeDetail()">⏳ 待复习</button>`:`<span style="flex:1;text-align:center;color:var(--primary);font-size:12px;">🎉 已彻底掌握</span>`}
+      ${!st.done?`<button class="btn btn-sm" style="flex:1;background:var(--primary);color:#fff;" onclick="ebbMistakeAction('${m.id}','master');nextMistakeDetail('${m.id}')">✅ 已掌握</button>
+      <button class="btn btn-sm btn-outline" style="flex:1;" onclick="ebbMistakeAction('${m.id}','again');nextMistakeDetail('${m.id}')">⏳ 待复习</button>`:`<span style="flex:1;text-align:center;color:var(--primary);font-size:12px;">🎉 已彻底掌握</span>`}
       <button class="btn btn-sm btn-outline" style="flex:1;" onclick="mistakeModal('${m.id}')">编辑</button>
       <button class="btn btn-sm btn-danger" style="flex:1;" onclick="delMistakeFromDetail('${m.id}')">删除</button>
       <button class="btn btn-sm" style="flex:1;" onclick="backFromMistakeDetail()">返回</button>
@@ -842,11 +842,35 @@ function backFromMistakeDetail(){
   closeModal();
   if(fn){ setTimeout(()=>window[fn](),50); }
 }
-/* 已掌握/待复习后 → 自动打开下一条待复习考点（复习不中断） */
-function nextMistakeDetail(){
+/* 已掌握/待复习后 → 自动打开下一条待复习考点（跳到当前题的下一题，不回第一条） */
+function nextMistakeDetail(currentId){
   const today=todayStr();
-  const list=(DB.mistakes||[]).filter(x=>{const st=getMistakeEbb(x); return !st.done && st.next<=today;});
-  if(list.length){ viewMistakeDetail(list[0].id); }
+  // 用完整列表找当前位置（当前题已被标记掌握，不在待复习列表中了）
+  let fullList = [...(DB.mistakes||[])];
+  // 如果有模块筛选，应用筛选
+  if(ebbMkFilter) fullList = fullList.filter(m=>m.module===ebbMkFilter);
+  const currentIdx = currentId ? fullList.findIndex(x=>x.id===currentId) : -1;
+  // 从当前位置往后找下一个待复习的
+  if(currentIdx >= 0){
+    for(let i = currentIdx + 1; i < fullList.length; i++){
+      const st = getMistakeEbb(fullList[i]);
+      if(!st.done && st.next <= today){
+        viewMistakeDetail(fullList[i].id);
+        return;
+      }
+    }
+    // 往后没找到，从头绕回找
+    for(let i = 0; i < currentIdx; i++){
+      const st = getMistakeEbb(fullList[i]);
+      if(!st.done && st.next <= today){
+        viewMistakeDetail(fullList[i].id);
+        return;
+      }
+    }
+  }
+  // 兜底：任意待复习的第一条
+  const dueList=(DB.mistakes||[]).filter(x=>{const st=getMistakeEbb(x); return !st.done && st.next<=today;});
+  if(dueList.length){ viewMistakeDetail(dueList[0].id); }
   else{ closeModal(); renderPage(currentPageName()); toast('🎉 今日考点复习完成！'); }
 }
 function delMistakeFromDetail(id){
@@ -2087,18 +2111,42 @@ function viewErrorDetail(id){
     ${e.audio?`<div class="detail-block">${renderVoiceBar(e.audio, e.audioText, 'vd_'+e.id)}</div>`:''}
     <div class="modal-foot">
       ${(()=>{const st=getErrorEbb(e); if(st.done) return '<span style="flex:1;text-align:center;color:var(--primary);font-size:12px;">🎉 已彻底掌握</span>';
-        return `<button class="btn btn-sm" style="flex:1;background:var(--primary);color:#fff;" onclick="ebbErrorAction('${e.id}','master');nextErrorDetail()">✅ 已掌握</button>
-      <button class="btn btn-sm btn-outline" style="flex:1;" onclick="ebbErrorAction('${e.id}','again');nextErrorDetail()">⏳ 待复习</button>`;})()}
+        return `<button class="btn btn-sm" style="flex:1;background:var(--primary);color:#fff;" onclick="ebbErrorAction('${e.id}','master');nextErrorDetail('${e.id}')">✅ 已掌握</button>
+      <button class="btn btn-sm btn-outline" style="flex:1;" onclick="ebbErrorAction('${e.id}','again');nextErrorDetail('${e.id}')">⏳ 待复习</button>`;})()}
       <button class="btn btn-sm btn-outline" style="flex:1" onclick="errorModal('${e.id}')">编辑</button>
       <button class="btn btn-sm btn-danger" style="flex:1" onclick="delErrorFromDetail('${e.id}')">删除</button>
       <button class="btn btn-sm" style="flex:1" onclick="backFromErrorDetail()">返回</button>
     </div>`);
 }
-/* 错题已掌握/待复习后 → 自动打开下一条待复习错题（复习不中断） */
-function nextErrorDetail(){
+/* 错题已掌握/待复习后 → 自动打开下一条待复习错题（跳到当前题的下一题，不回第一条） */
+function nextErrorDetail(currentId){
   const today=todayStr();
-  const list=DB.errors.filter(x=>{const st=getErrorEbb(x); return !st.done && st.next<=today;});
-  if(list.length){ viewErrorDetail(list[0].id); }
+  // 用完整列表找当前位置（当前题已被标记掌握，不在待复习列表中了）
+  let fullList = [...DB.errors].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  // 如果有模块筛选，应用筛选
+  if(ebbErrFilter) fullList = fullList.filter(e=>e.module===ebbErrFilter);
+  const currentIdx = currentId ? fullList.findIndex(e=>e.id===currentId) : -1;
+  // 从当前位置往后找下一个待复习的
+  if(currentIdx >= 0){
+    for(let i = currentIdx + 1; i < fullList.length; i++){
+      const st = getErrorEbb(fullList[i]);
+      if(!st.done && st.next <= today){
+        viewErrorDetail(fullList[i].id);
+        return;
+      }
+    }
+    // 往后没找到，从头绕回找
+    for(let i = 0; i < currentIdx; i++){
+      const st = getErrorEbb(fullList[i]);
+      if(!st.done && st.next <= today){
+        viewErrorDetail(fullList[i].id);
+        return;
+      }
+    }
+  }
+  // 兜底：任意待复习的第一条
+  const dueList = DB.errors.filter(x=>{const st=getErrorEbb(x); return !st.done && st.next<=today;});
+  if(dueList.length){ viewErrorDetail(dueList[0].id); }
   else{ closeModal(); renderPage(currentPageName()); toast('🎉 今日错题复习完成！'); }
 }
 /* 从错题详情返回：如果是从列表进入的，回到对应列表（而不是退出到页面） */
@@ -3660,7 +3708,15 @@ function renderSettingsKBList(){
   return `<div class="kb-tabs">${cats}</div>${listHtml}`;
 }
 /* 积累页：每日随机展示知识库内容 + 时政实时新闻（类似推送页风格） */
+/* 缓存机制：同一天+同一刷新次数内，直接用缓存的HTML，不再重新渲染/抓取新闻。
+   只有点"换一批"（accuRefresh）或新一天才会清除缓存重新渲染。 */
 async function renderAccu(){
+  const seed=getAccuSeed();
+  // 缓存命中：直接用上次渲染的HTML，不再抓取新闻或重新随机
+  if(DB.accuHtmlCache && DB.accuHtmlCache.seed===seed && DB.accuHtmlCache.html){
+    const el=document.getElementById('page-accu');
+    if(el){ el.innerHTML=DB.accuHtmlCache.html; return; }
+  }
   const catIcons={'常识':'🌐','政治理论':'🏛️','每日时政':'📰','言语素材':'💬','申论素材':'📝','面试':'🎤'};
   let cards='';
   // 每日时政：实时抓取新闻（异步），放在政治理论后面
@@ -3676,7 +3732,7 @@ async function renderAccu(){
         let gdList=liveNews.gd.slice(0,3);
         if(!gdList.length){
           const gdPool=SZ_HOT_POOL.filter(h=>h.isGD);
-          gdList=shuffle(gdPool).slice(0,2).map(h=>({title:h.title,url:h.url||''}));
+          gdList=seededShuffle(gdPool,seed+1).slice(0,2).map(h=>({title:h.title,url:h.url||''}));
         }
         if(gdList.length){
           newsSections+=`<details open style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--primary);cursor:pointer;padding:4px 0;">广东要闻</summary><div>${gdList.map(n=>`<div style="padding:3px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);">${linkify('· '+n.title+(n.url?'\n  '+n.url:''))}</div>`).join('')}</div></details>`;
@@ -3695,7 +3751,7 @@ async function renderAccu(){
         // 离线兜底
         const gdPool=SZ_HOT_POOL.filter(h=>h.isGD);
         const otherPool=SZ_HOT_POOL.filter(h=>!h.isGD);
-        const hot=[...shuffle(gdPool).slice(0,2), ...shuffle(otherPool).slice(0,4)];
+        const hot=[...seededShuffle(gdPool,seed+1).slice(0,2), ...seededShuffle(otherPool,seed+2).slice(0,4)];
         newsSections=`<details open style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--primary);cursor:pointer;padding:4px 0;">近期热点</summary><div>${hot.map(h=>`<div style="padding:3px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);">${linkify('· ['+h.date+'] '+h.title+(h.url?'\n  '+h.url:''))}</div>`).join('')}</div></details>`;
         cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span class="section-tag">近期</span></div>${newsSections}</div>`;
       }
@@ -3728,8 +3784,8 @@ async function renderAccu(){
           const rich=tzTopics.filter(t=>t.items.length>=5);
           const pool=rich.length?rich:tzTopics.filter(t=>t.items.length>=2);
           const finalPool=pool.length?pool:tzTopics;
-          const t=shuffle(finalPool)[0];
-          const picked=shuffle(t.items).slice(0,5);
+          const t=seededShuffle(finalPool,seed+10)[0];
+          const picked=seededShuffle(t.items,seed+11).slice(0,5);
           if(picked.length){
             cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>时政积累</span><span class="section-tag">${escapeHtml(t.topic)}</span></div>
             ${picked.map(p=>`<div style="padding:4px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);">${escapeHtml(p)}</div>`).join('')}</div>`;
@@ -3742,7 +3798,7 @@ async function renderAccu(){
     if(!items.length) continue;
     if(cat.display==='言语素材'){
       const words=extractYyWords(items);
-      const picked=shuffle(words).slice(0,12);
+      const picked=seededShuffle(words,seed+20).slice(0,12);
       if(picked.length){
         cards+=`<div class="card">
           <div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span class="section-tag">${words.length}条</span></div>
@@ -3753,12 +3809,15 @@ async function renderAccu(){
       const slItems=items.filter(k=>!/小题/.test(k.cat||''));
       const topics=parseShenlunContent(slItems);
       if(topics.length){
-        const picked=shuffle(topics).slice(0,1);
+        const picked=seededShuffle(topics,seed+30).slice(0,1);
         for(const t of picked){
           let sectionHtml='';
           for(const [type,arr] of Object.entries(t.sections)){
             if(!arr||!arr.length) continue;
-            const p2=shuffle(arr).slice(0,2);
+            // 案例类：过滤纯空案例，有内容的原样保留
+            const filtered=(type==='案例举证'||type==='案例')?arr.filter(x=>isCaseValid(x)):arr;
+            if(!filtered.length) continue;
+            const p2=seededShuffle(filtered,seed+31).slice(0,2);
             sectionHtml+=`<details open style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--text);cursor:pointer;padding:4px 0;">${escapeHtml(type)}</summary><div style="padding:4px 0 6px;">${p2.map(x=>`<div style="font-size:12px;color:var(--text);line-height:1.7;padding:2px 0;">${escapeHtml(x)}</div>`).join('')}</div></details>`;
           }
           cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span class="section-tag">${escapeHtml(t.topic||'')}</span></div>${sectionHtml}</div>`;
@@ -3769,8 +3828,8 @@ async function renderAccu(){
         const xtData=parseXiaoTi(xtItems);
         const xtCats=Object.keys(xtData).filter(k=>xtData[k].length);
         if(xtCats.length){
-          const pickCats=shuffle(xtCats).slice(0,3);
-          const xtHtml=pickCats.map(xc=>`<details style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--text);cursor:pointer;padding:4px 0;">${escapeHtml(xc)}</summary><div>${shuffle(xtData[xc]).slice(0,3).map(x=>`<div style="font-size:12px;color:var(--text);padding:2px 0;line-height:1.7;">${escapeHtml(x)}</div>`).join('')}</div></details>`).join('');
+          const pickCats=seededShuffle(xtCats,seed+40).slice(0,3);
+          const xtHtml=pickCats.map(xc=>`<details style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--text);cursor:pointer;padding:4px 0;">${escapeHtml(xc)}</summary><div>${seededShuffle(xtData[xc],seed+41).slice(0,3).map(x=>`<div style="font-size:12px;color:var(--text);padding:2px 0;line-height:1.7;">${escapeHtml(x)}</div>`).join('')}</div></details>`).join('');
           cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>申论小题</span><span class="section-tag">${xtCats.length}类</span></div>${xtHtml}</div>`;
         }
       }
@@ -3813,8 +3872,8 @@ async function renderAccu(){
         const rich=topics.filter(t=>t.items.length>=5);
         const pool=rich.length?rich:topics.filter(t=>t.items.length>=2);
         const finalPool=pool.length?pool:topics;
-        const t=shuffle(finalPool)[0];
-        const picked=shuffle(t.items).slice(0,5);
+        const t=seededShuffle(finalPool,seed+50)[0];
+        const picked=seededShuffle(t.items,seed+51).slice(0,5);
         cards+=`<div class="card">
           <div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span class="section-tag">${escapeHtml(t.topic)}</span></div>
           ${picked.map(p=>`<div style="padding:4px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);">${escapeHtml(p)}</div>`).join('')}
@@ -3823,14 +3882,17 @@ async function renderAccu(){
     }
   }
   if(!cards) cards='<div class="empty-state"><div class="emoji">🗃️</div><div class="txt">知识库暂无内容，请在设置 → 知识库管理中导入</div></div>';
-  document.getElementById('page-accu').innerHTML=`
-    <div class="card">
+  const accuHtml=`<div class="card">
       <div class="card-title"><span class="left"><span class="emoji">🗃️</span>积累</span>
-        <button class="btn btn-sm btn-outline" onclick="renderAccu()">🔄 换一批</button>
+        <button class="btn btn-sm btn-outline" onclick="accuRefresh()">🔄 换一批</button>
       </div>
       <div style="font-size:11px;color:var(--text-light);margin:-4px 0 8px;">每日从知识库随机展示积累内容 · 点击换一批刷新</div>
     </div>
     ${cards}`;
+  document.getElementById('page-accu').innerHTML=accuHtml;
+  // 缓存渲染结果（同一天+同一刷新次数内不重新渲染）
+  DB.accuHtmlCache={seed:seed, html:accuHtml};
+  saveDB();
 }
 function setKbCat(c){
   kbCat=c;
@@ -4119,19 +4181,45 @@ function renderSettings(){
         <input type="file" id="importFile" accept=".json" style="display:none" onchange="importData(this)">
       </div>
       <div class="set-item">
-        <div><div class="s-name">🔄 重置并重新加载</div><div class="s-desc">清除缓存+旧数据，重新加载最新页面（解决更新后页面没变化）</div></div>
+        <div><div class="s-name">📊 导入刷题记录Excel</div><div class="s-desc">行测刷题记录表：每行→学习记录，问题+改进方法自动同步到易错考点</div></div>
+        <label class="btn btn-sm btn-outline" for="importStudyFile" style="cursor:pointer;display:inline-flex;">导入</label>
+        <input type="file" id="importStudyFile" accept=".xlsx,.xls" style="display:none" onchange="importStudyExcel(this)">
+      </div>
+      <div class="set-item">
+        <div><div class="s-name">📥 导出刷题记录Excel</div><div class="s-desc">导出学习记录 + 刷题进度 + 错题表（按原格式，便于备份或分享）</div></div>
+        <button class="btn btn-sm btn-outline" onclick="exportStudyExcel()">导出</button>
+      </div>
+      <div class="set-item">
+        <div><div class="s-name">🔄 重置并重新加载</div><div class="s-desc">清除页面缓存并重新加载最新版本（不影响学习记录）</div></div>
         <button class="btn btn-sm" onclick="hardReset()">一键重置</button>
       </div>
     </div>
     <div class="card">
-      <div class="card-title"><span class="left"><span class="emoji">⏰</span>推送设置</span></div>
-      <div class="set-item">
-        <div><div class="s-name">定时推送提醒</div><div class="s-desc">早7点自动生成早间推送，晚22点生成复盘提醒</div></div>
+      <div class="card-title"><span class="left"><span class="emoji">⏰</span>定时推送提醒</span>
         <button class="btn btn-sm ${DB.settings.autoPush!==false?'':'btn-outline'}" onclick="toggleAutoPush()">${DB.settings.autoPush!==false?'已开启':'关闭'}</button>
       </div>
+      <div style="display:flex;gap:8px;margin-bottom:8px;">
+        <div style="flex:1;background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px;">
+          <div style="font-size:13px;font-weight:700;color:var(--text);">早7:00 每日推送</div>
+          <div style="font-size:11px;color:var(--text-light);margin:2px 0 8px;line-height:1.5;">薄弱模块提醒</div>
+          <button class="btn btn-sm" onclick="generateMorningPush()" style="width:100%;">立即生成</button>
+        </div>
+        <div style="flex:1;background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px;">
+          <div style="font-size:13px;font-weight:700;color:var(--text);">晚22:00 复盘提醒</div>
+          <div style="font-size:11px;color:var(--text-light);margin:2px 0 8px;line-height:1.5;">填写每日学习总结与复盘</div>
+          <button class="btn btn-sm" onclick="generateNightPush()" style="width:100%;">立即生成</button>
+        </div>
+      </div>
+      <div class="set-item" style="border-top:1px solid var(--border);padding-top:8px;">
+        <div><div class="s-name">📋 查看推送历史</div><div class="s-desc">查看历次推送内容</div></div>
+        <button class="btn btn-sm btn-outline" onclick="navTo('push')">查看</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="left"><span class="emoji">📊</span>每周错题汇总</span></div>
       <div class="set-item">
-        <div><div class="s-name">每周错题汇总</div><div class="s-desc">手动生成本周错题汇总报告（按模块统计+薄弱点分析）</div></div>
-        <button class="btn btn-sm btn-outline" onclick="generateWeeklyReport()">生成报告</button>
+        <div><div class="s-name">生成本周错题报告</div><div class="s-desc">提炼本周薄弱点与提升方向</div></div>
+        <button class="btn btn-sm btn-outline" onclick="generateWeeklyReport()">生成</button>
       </div>
     </div>
     <div class="card">
@@ -4317,12 +4405,17 @@ function importMistakesFromErrors(){
     // 每个候选考点都尝试导入（多行point→多考点）
     points.forEach(point=>{
       if(!point||point.length<2) return;
-      // 已存在判断：比较知识点首行（兼容 point 里已带复习提醒的旧数据）
-      const exists=DB.mistakes.find(m=>m.module===e.module&&(m.point||'').split('\n')[0].trim()===point);
+      // 已存在判断：比较知识点首行（去掉首尾空格后精确匹配）
+      const exists=DB.mistakes.find(m=>{
+        if(m.module!==e.module) return false;
+        const mp=(m.point||'').split('\n')[0].trim();
+        return mp===point;
+      });
       if(exists){
         // 已存在该考点：复习提醒补充进"易错知识点"字段（而非备注）
         if(review && !(exists.point||'').includes(review)){
           exists.point=[exists.point,reviewPart].filter(Boolean).join('\n');
+          exists.updatedAt=Date.now();
           updated++;
         }
         return;
@@ -4333,8 +4426,39 @@ function importMistakesFromErrors(){
       added++;
     });
   });
+  // 导入后去重：清理完全重复的考点（保留复习轮次更多的）
+  dedupMistakes();
   saveDB(); renderSettings();
   toast('已导入'+added+'条易错考点'+(updated?'，补充复习提醒'+updated+'条':''));
+}
+/* 去重易错考点：同模块+同知识点首行视为重复，保留复习轮次（stage）更大的那条 */
+function dedupMistakes(){
+  if(!DB.mistakes||!DB.mistakes.length) return;
+  const keep=new Map(); // key → mistake
+  const removeIds=[];
+  DB.mistakes.forEach(m=>{
+    const key=(m.module||'')+'|'+(m.point||'').split('\n')[0].trim();
+    const cur=keep.get(key);
+    if(!cur){
+      keep.set(key,m);
+    }else{
+      // 比较复习轮次，保留 stage 更大的
+      const curEbb=getMistakeEbb(cur);
+      const mEbb=getMistakeEbb(m);
+      if(mEbb.stage>curEbb.stage || (mEbb.stage===curEbb.stage && mEbb.done && !curEbb.done)){
+        // 新的更好，替换
+        removeIds.push(cur.id);
+        keep.set(key,m);
+      }else{
+        // 当前的更好，跳过新的
+        removeIds.push(m.id);
+      }
+    }
+  });
+  if(removeIds.length){
+    DB.mistakes=DB.mistakes.filter(m=>!removeIds.includes(m.id));
+    removeIds.forEach(id=>{ if(DB.mistakeEbb) delete DB.mistakeEbb[id]; markDeleted('mistakes',id); });
+  }
 }
 function exportData(){
   const data=JSON.stringify(DB,null,2);
@@ -4410,9 +4534,9 @@ function clearAllData(){
 }
 /* 硬重置：清 localStorage + 强制刷新加载最新文件 */
 function hardReset(){
-  if(!confirm('将清除本地缓存和旧数据，重新加载最新页面。你的学习记录会丢失（如需保留请先导出备份）。继续？')) return;
-  localStorage.removeItem(STORAGE_KEY);
-  localStorage.removeItem('gk_workbench_v1');
+  if(!confirm('将清除页面缓存并重新加载最新版本（不影响你的学习记录）。继续？')) return;
+  // 只清缓存，不清学习数据
+  try{ localStorage.removeItem(NEWS_CACHE_KEY); }catch(e){}
   // 强制刷新，绕过缓存
   location.href = location.href.split('#')[0] + '?_t=' + Date.now();
   location.reload(true);
@@ -4425,7 +4549,12 @@ function showPushPage(){
   navTo('push');
 }
 function renderPush(){
-  const list=[...DB.pushHistory].sort((a,b)=>b.time.localeCompare(a.time));
+  // 用数值时间戳排序（旧数据没有 ts 的回退解析 time 字符串）
+  const list=[...DB.pushHistory].sort((a,b)=>{
+    const ta=a.ts||new Date((a.time||'').replace(/\//g,'-')).getTime()||0;
+    const tb=b.ts||new Date((b.time||'').replace(/\//g,'-')).getTime()||0;
+    return tb-ta;
+  });
   const html=list.length?list.map(p=>{
     // 按【①】【②】…圈号大标题分段为卡片
     const sections=[];
@@ -4458,7 +4587,7 @@ function renderPush(){
       <div class="card-title"><span class="left"><span class="emoji">⏰</span>推送提醒</span>
         <div style="display:flex;gap:6px;flex-wrap:wrap;">
           <button class="btn btn-sm btn-outline" onclick="generateMorningPush()" style="white-space:nowrap;flex-shrink:0;min-width:68px;">立即生成</button>
-          <button class="btn btn-sm btn-outline" onclick="forceRefreshPush()" title="无视缓存强制重新抓取新闻" style="white-space:nowrap;flex-shrink:0;min-width:68px;">🔄强制重抓</button>
+          <button class="btn btn-sm btn-outline" onclick="forceRefreshPush()" title="清除推送缓存，重新生成" style="white-space:nowrap;flex-shrink:0;min-width:68px;">🔄强制重抓</button>
           <button class="btn btn-sm btn-outline" onclick="if(confirm('清空所有推送历史？')){DB.pushHistory=[];saveDB();renderPush();toast('已清空');}" style="white-space:nowrap;flex-shrink:0;min-width:68px;">清空历史</button>
         </div>
       </div>
@@ -4618,15 +4747,47 @@ function addPush(type,title,content,fetchInfo){
   if(type){
     DB.pushHistory=DB.pushHistory.filter(p=>!(p.type===type && (p.time||'').includes(today.replace(/-/g,'/'))));
   }
-  DB.pushHistory.push({id:uid(),type,title,content,time:new Date().toLocaleString('zh-CN'),fetchInfo:fetchInfo||''});
+  DB.pushHistory.push({id:uid(),type,title,content,time:new Date().toLocaleString('zh-CN'),ts:Date.now(),fetchInfo:fetchInfo||''});
   if(DB.pushHistory.length>100) DB.pushHistory=DB.pushHistory.slice(-100);
   saveDB();
 }
-/* 强制重新抓取：清掉 fetchLiveNews 缓存 + 重新生成早间推送（无视旧缓存） */
+/* 强制重新抓取：清除今天的推送标记和历史 + 重新生成早间推送 */
 async function forceRefreshPush(){
+  // 清除今天的推送标记，允许重新生成
+  const today=todayStr();
+  if(DB.settings.lastPush){
+    DB.settings.lastPush=DB.settings.lastPush.split(',').filter(p=>!p.startsWith(today+'_')).join(',');
+    saveDB();
+  }
+  // 清除今天的推送历史（避免新旧内容堆积）
+  DB.pushHistory=(DB.pushHistory||[]).filter(p=>{
+    const d=(p.time||'').match(/(\d{4})\/(\d+)\/(\d+)/);
+    const ds=d?`${d[1]}-${String(d[2]).padStart(2,'0')}-${String(d[3]).padStart(2,'0')}`:'';
+    return ds!==today;
+  });
+  saveDB();
   try{ localStorage.removeItem(NEWS_CACHE_KEY); }catch(e){}
-  toast('正在强制重新抓取...');
-  await generateMorningPush();
+  toast('正在重新生成推送...');
+  try{
+    await generateMorningPush();
+    toast('推送已重新生成');
+  }catch(e){
+    console.error('forceRefreshPush error:',e);
+    toast('生成失败：'+String(e.message||e));
+  }
+}
+/* 检查案例是否有实际内容（过滤纯空案例）。
+   "案例一：红旗渠...苦干实干…… → 可论证：艰苦奋斗 → 可论证：" → 有内容，返回 true（原样保留）
+   "案例二：→ 可论证：" → 纯空，返回 false（跳过）
+   完整案例从头到尾原封不动保留，不删任何内容。 */
+function isCaseValid(text){
+  if(!text) return false;
+  const s=text.trim();
+  // 去掉"案例X："前缀后检查是否有实际内容
+  const after=s.replace(/^案例[一二三四五六七八九十\d]+[：:]\s*/,'').trim();
+  // 去掉所有"→ 可论证：xxx"模板占位符后看还剩什么
+  const real=after.replace(/→\s*可论证[：:][^\n]*/g,'').replace(/[→\s]/g,'').trim();
+  return real.length>=4;
 }
 /* 智能解析申论素材（兼容Word导出格式：子分类标题无【】、跳过"用途"行）
    返回结构化数组：[{topic:'高质量发展', sections:{'开篇金句':[...],'分论点框架':[...],...}}] */
@@ -4693,7 +4854,10 @@ function parseShenlunContent(records){
       if(type==='案例举证'||type==='案例'){
         // 案例块：以"案例X："开头开始新案例，其余行追加到当前案例
         if(/^案例[一二三四五六七八九十\d]+[：:]/.test(line)){
-          curSections[type].push(line);
+          // 有实际内容的案例原样保留，纯空案例跳过
+          if(isCaseValid(line)){
+            curSections[type].push(line);
+          }
         }else{
           if(curSections[type].length) curSections[type][curSections[type].length-1]+='\n'+line;
           else curSections[type].push(line);
@@ -4706,14 +4870,19 @@ function parseShenlunContent(records){
   flushTopic();
   return results;
 }
-/* 从解析结果中提取某子分类的所有内容 */
+/* 从解析结果中提取某子分类的所有内容（过滤空案例） */
 function pickSection(results, types){
   const items=[];
   results.forEach(r=>{
     types.forEach(t=>{
       (r.sections[t]||[]).forEach(x=>{
         const clean=x.trim();
-        if(clean.length>=6) items.push(clean);
+        if(clean.length<6) return; // 太短跳过
+        // 案例类：纯空案例跳过，有内容的原样保留
+        if(/^案例[一二三四五六七八九十\d]+[：:]/.test(clean)){
+          if(!isCaseValid(clean)) return; // 空案例跳过
+        }
+        items.push(clean);
       });
     });
   });
@@ -4757,6 +4926,37 @@ function shuffle(arr){
     [a[i],a[j]]=[a[j],a[i]];
   }
   return a;
+}
+/* 基于种子的确定性 shuffle（同一种子+同一数组 → 同一结果） */
+function seededShuffle(arr, seed){
+  const a=[...arr];
+  let s=seed;
+  for(let i=a.length-1;i>0;i--){
+    s=(s*9301+49297)%233280;
+    const j=Math.floor((s/233280)*(i+1));
+    [a[i],a[j]]=[a[j],a[i]];
+  }
+  return a;
+}
+/* 积累页种子：当天日期 + 换一批次数（点换一批+1，新一天归零） */
+function getAccuSeed(){
+  const today=todayStr();
+  if((DB.accuSeedDate||'')!==today){
+    DB.accuSeedDate=today;
+    DB.accuSeedCount=0;
+    DB.accuHtmlCache=null; // 新一天清除渲染缓存
+    saveDB();
+  }
+  // 种子 = 日期数字 + 换一批次数
+  const dateNum=parseInt(today.replace(/-/g,''));
+  return dateNum*1000 + (DB.accuSeedCount||0);
+}
+/* 手动换一批：种子+1，清除缓存触发重新渲染 */
+function accuRefresh(){
+  DB.accuSeedCount=(DB.accuSeedCount||0)+1;
+  DB.accuHtmlCache=null; // 清除渲染缓存
+  saveDB();
+  renderAccu();
 }
 /* 内置言语高频词池（30条） */
 const YY_WORDS_POOL=[
@@ -4944,28 +5144,33 @@ function fmtNewsTime(ts){
 }
 
 async function generateMorningPush(){
-  const today=todayStr();
-  let content='';
-  // ① 薄弱模块提醒（易错考点/错题复习已移到主页"待复习"区，推送不再重复列出）
-  content+='【① 薄弱模块提醒】\n';
-  const ebbErrCount=DB.errors.filter(e=>{const st=getErrorEbb(e);return !st.done&&st.next<=today;}).length;
-  const ebbMkCount=(DB.mistakes||[]).filter(m=>{const st=getMistakeEbb(m);return !st.done&&st.next<=today;}).length;
-  if(ebbErrCount||ebbMkCount){
-    content+='· 今日待复习：错题 '+ebbErrCount+' 条、易错考点 '+ebbMkCount+' 条（主页「今日待复习」打卡复习）\n';
-  }
-  const moduleCount={};
-  DB.errors.forEach(e=>{ moduleCount[e.module]=(moduleCount[e.module]||0)+1; });
-  const sorted=Object.entries(moduleCount).sort((a,b)=>b[1]-a[1]);
-  if(sorted.length){
-    const weakModule=sorted[0];
-    const mod=MODULES.find(m=>m.key===weakModule[0]);
-    content+='\n📊 错题最多【'+ (mod?mod.name:'') +'】模块重点：\n'+getModuleTips(weakModule[0]);
-  }
-  // ② 言语/申论/时政内容已移至「积累」页面，推送不再重复
+  try{
+    const today=todayStr();
+    let content='';
+    // ① 薄弱模块提醒（易错考点/错题复习已移到主页"待复习"区，推送不再重复列出）
+    content+='【① 薄弱模块提醒】\n';
+    const ebbErrCount=DB.errors.filter(e=>{const st=getErrorEbb(e);return !st.done&&st.next<=today;}).length;
+    const ebbMkCount=(DB.mistakes||[]).filter(m=>{const st=getMistakeEbb(m);return !st.done&&st.next<=today;}).length;
+    if(ebbErrCount||ebbMkCount){
+      content+='· 今日待复习：错题 '+ebbErrCount+' 条、易错考点 '+ebbMkCount+' 条（主页「今日待复习」打卡复习）\n';
+    }
+    const moduleCount={};
+    DB.errors.forEach(e=>{ moduleCount[e.module]=(moduleCount[e.module]||0)+1; });
+    const sorted=Object.entries(moduleCount).sort((a,b)=>b[1]-a[1]);
+    if(sorted.length){
+      const weakModule=sorted[0];
+      const mod=MODULES.find(m=>m.key===weakModule[0]);
+      content+='\n📊 错题最多【'+ (mod?mod.name:'') +'】模块重点：\n'+getModuleTips(weakModule[0]);
+    }
+    // ② 言语/申论/时政内容已移至「积累」页面，推送不再重复
 
-  addPush('早间推送','每日学习推送 '+today,content);
-  renderPush();
-  toast('已生成今日早间推送');
+    addPush('早间推送','每日学习推送 '+today,content);
+    renderPush();
+    toast('已生成今日早间推送');
+  }catch(e){
+    console.error('generateMorningPush error:',e);
+    toast('早间推送生成失败：'+String(e.message||e));
+  }
 }
 
 function getModuleTips(key){
@@ -5054,16 +5259,20 @@ function checkScheduledPush(){
   const lastPush=DB.settings.lastPush||'';
   // 早7点后且今天没推过早间
   if(h>=7 && !lastPush.includes(today+'_morning')){
-    generateMorningPush();
-    DB.settings.lastPush=today+'_morning';
+    DB.settings.lastPush=(lastPush?lastPush+',':'')+today+'_morning';
     saveDB();
-    toast('早间推送已生成');
+    generateMorningPush().then(()=>{
+      toast('早间推送已生成');
+    }).catch(e=>{
+      console.error('早间推送生成失败',e);
+      toast('早间推送生成失败');
+    });
   }
   // 晚22点后且今天没推过晚间
   if(h>=22 && !lastPush.includes(today+'_night')){
-    generateNightPush();
     DB.settings.lastPush=(DB.settings.lastPush?DB.settings.lastPush+',':'')+today+'_night';
     saveDB();
+    generateNightPush();
     toast('晚间复盘提醒');
   }
 }
@@ -5103,6 +5312,12 @@ function restoreScrollPos(page){
 }
 function init(){
   loadDB();
+  // 一次性去重：清理历史导入产生的重复考点（保留复习轮次更多的）
+  if(!DB._mistakeDeduped){
+    dedupMistakes();
+    DB._mistakeDeduped=true;
+    saveDB();
+  }
   renderBottomNav();
   // 初始化云端同步（异步，不阻塞页面加载）
   setTimeout(()=>{ try{ initSupabase(); }catch(e){ setSyncState('error'); } }, 600);
@@ -5544,6 +5759,7 @@ function mergeById(a, b){
 function mergeObjFields(cur, x){
   const tu = cur.updatedAt || 0, tv = x.updatedAt || 0;
   const cloudNewer = !!(tu && tv && tv > tu);       // 两边都有时间戳且云端更新
+  const localNewer = !!(tu && (!tv || tu > tv));    // 本地有时间戳且比云端新（或云端没有时间戳）
   const bothOld = !tu && !tv;                        // 两边都是存量旧数据（无时间戳）
   const out = { ...cur };
   const CONTENT_FIELDS = ['question','improve','book','point','duration','desc','answer','reason','note','content','feishuUrl'];
@@ -5559,25 +5775,29 @@ function mergeObjFields(cur, x){
       continue;
     }
     if(cloudNewer){
-      // v2.1.81 SYNC-009 修复：云端较新时，逐字段非空覆盖——云端有值覆盖本地，云端空值不覆盖本地有值
-      // 这样并发修改不同字段时，各设备的修改都能保留
+      // 云端较新：逐字段非空覆盖——云端有值覆盖本地，云端空值不覆盖本地有值
       const cloudNotEmpty = v !== undefined && v !== null && v !== '' && !(Array.isArray(v) && !v.length) && !(typeof v === 'object' && v !== null && !Object.keys(v).length);
       if(cloudNotEmpty || c === undefined || c === null || c === ''){
-        out[k] = v; // 云端有值，或本地为空 → 用云端
+        out[k] = v;
       }
-      // 否则保留本地值（云端为空但本地有值）
+      continue;
+    }
+    if(localNewer){
+      // 本地较新（包括本地有时间戳但云端没有的情况）：本地有值保留本地，本地为空用云端补
+      // 不走 bothOld 的"谁长用谁"逻辑，确保本地编辑不被云端旧数据覆盖
+      const empty = c === undefined || c === null || c === '' || (Array.isArray(c) && !c.length) || (typeof c === 'object' && c !== null && !Object.keys(c).length);
+      if(empty) out[k] = v;
       continue;
     }
     if(bothOld && CONTENT_FIELDS.includes(k)){
-      // 存量旧数据：谁更长更完整用谁，防丢
+      // 两边都是存量旧数据（都无时间戳）：谁更长更完整用谁，防丢
       const vv = (v === undefined || v === null) ? '' : String(v);
       const cc = (c === undefined || c === null) ? '' : String(c);
       if(!cc){ out[k] = v; }
       else if(vv && vv.length > cc.length){ out[k] = v; }
       continue;
     }
-    // 本地较新/相等 或 非内容字段：本地有值保留本地，本地为空用云端补
-    // v2.1.81 SYNC-008 修复：移除 c === 0（0 是合法值，不应被覆盖）
+    // 默认：本地有值保留本地，本地为空用云端补
     const empty = c === undefined || c === null || c === '' || (Array.isArray(c) && !c.length) || (typeof c === 'object' && c !== null && !Object.keys(c).length);
     if(empty) out[k] = v;
   }
