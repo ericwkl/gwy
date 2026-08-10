@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.1.98</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.1.99</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -2056,9 +2056,12 @@ function saveError(id){
   const audioEl=document.getElementById('er_audio');
   const audio=audioEl&&audioEl.dataset?audioEl.dataset.audio||'':'';
   if(!desc&&!_errorPhotos.length&&!audio){ toast('请填写内容'); return; }
-  // 防御：清理掉之前误存的非字符串脏数据（{}/null 等），只保留合法 base64
+  // 防御：清理掉之前误存的非字符串脏数据（{}/null 等），保留合法 base64 和云端URL
   for(let i=_errorPhotos.length-1;i>=0;i--){
-    if(typeof _errorPhotos[i]!=='string'||!_errorPhotos[i].startsWith('data:')) _errorPhotos.splice(i,1);
+    if(typeof _errorPhotos[i]!=='string'||!(
+      _errorPhotos[i].startsWith('data:') ||
+      _errorPhotos[i].startsWith('https://')
+    )) _errorPhotos.splice(i,1);
   }
   if(_errorPhotos.length>6){ toast('截图最多 6 张，请删减后再保存'); return; }
   // 大图上传 Supabase Storage（原图不压缩），云端只存链接；失败则保留 base64
@@ -4744,8 +4747,12 @@ function addPush(type,title,content,fetchInfo){
     return dateStr >= cutoffStr;
   });
   // 同类型同日期的旧推送只保留最新一条（避免"重新生成"时旧版内容堆积）
+  // v2.1.99 修复：toLocaleString('zh-CN') 生成"2026/8/10"（无零填充），
+  // 之前用 today.replace(/-/g,'/')="2026/08/10" 做 includes 匹配失败，旧推送没被清除
   if(type){
-    DB.pushHistory=DB.pushHistory.filter(p=>!(p.type===type && (p.time||'').includes(today.replace(/-/g,'/'))));
+    const dayStart=new Date(today+'T00:00:00').getTime();
+    const dayEnd=dayStart+86400000;
+    DB.pushHistory=DB.pushHistory.filter(p=>!(p.type===type && p.ts>=dayStart && p.ts<dayEnd));
   }
   DB.pushHistory.push({id:uid(),type,title,content,time:new Date().toLocaleString('zh-CN'),ts:Date.now(),fetchInfo:fetchInfo||''});
   if(DB.pushHistory.length>100) DB.pushHistory=DB.pushHistory.slice(-100);
