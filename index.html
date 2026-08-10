@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.1.99</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.00</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -3715,8 +3715,11 @@ function renderSettingsKBList(){
    只有点"换一批"（accuRefresh）或新一天才会清除缓存重新渲染。 */
 async function renderAccu(){
   const seed=getAccuSeed();
-  // 缓存命中：直接用上次渲染的HTML，不再抓取新闻或重新随机
-  if(DB.accuHtmlCache && DB.accuHtmlCache.seed===seed && DB.accuHtmlCache.html){
+  // 知识库签名：条数+最新更新时间，知识库变化时缓存自动失效
+  const kbItems=DB.knowledge||[];
+  const kbSig=kbItems.length+'_'+(kbItems.length?Math.max(...kbItems.map(k=>k.updatedAt||0)):0);
+  // 缓存命中：种子相同+知识库签名相同，才用缓存（防止知识库变化后仍显示旧缓存）
+  if(DB.accuHtmlCache && DB.accuHtmlCache.seed===seed && DB.accuHtmlCache.kbSig===kbSig && DB.accuHtmlCache.html){
     const el=document.getElementById('page-accu');
     if(el){ el.innerHTML=DB.accuHtmlCache.html; return; }
   }
@@ -3893,8 +3896,8 @@ async function renderAccu(){
     </div>
     ${cards}`;
   document.getElementById('page-accu').innerHTML=accuHtml;
-  // 缓存渲染结果（同一天+同一刷新次数内不重新渲染）
-  DB.accuHtmlCache={seed:seed, html:accuHtml};
+  // 缓存渲染结果（同一天+同一刷新次数+知识库不变时不重新渲染）
+  DB.accuHtmlCache={seed:seed, kbSig:kbSig, html:accuHtml};
   saveDB();
 }
 function setKbCat(c){
@@ -5543,6 +5546,8 @@ function scheduleSyncPush(){
    数据库只存图片链接，避免整库超出 PostgREST 请求体上限；小图直接保留 base64 */
 async function slimForSync(){
   const clone = JSON.parse(JSON.stringify(DB));
+  // accuHtmlCache 是本地渲染缓存，不同步到云端（防止其他设备收到过时缓存）
+  delete clone.accuHtmlCache;
   const tasks = [];
   (clone.errors || []).forEach(e => { (e.photos || []).forEach((p, i) => { if(typeof p === 'string' && p.startsWith('data:') && p.length > 300 * 1024) tasks.push({ arr: e.photos, i, p }); }); });
   (clone.reviews || []).forEach(r => { (r.photos || []).forEach((p, i) => { if(typeof p === 'string' && p.startsWith('data:') && p.length > 300 * 1024) tasks.push({ arr: r.photos, i, p }); }); });
@@ -5655,6 +5660,8 @@ function mergeLocalCloud(local, cloud){
   for(const k of Object.keys(c)){
     const b = c[k];
     if(b === null || b === undefined) continue;
+    // accuHtmlCache 是本地渲染缓存，不从云端合并（防止过时缓存覆盖本地）
+    if(k === 'accuHtmlCache') continue;
     if(k === 'mistakeEbb' || k === 'errorEbb'){
       // 艾宾浩斯复习状态：取 stage 大者（已掌握更多轮优先），同 stage 取 next 更晚者
       // 同时剔除墓碑 id 对应的状态（删除错题/考点后复习状态也同步清除，防止复活）
