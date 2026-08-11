@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.06</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.07</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -956,10 +956,11 @@ function renderPlan(){
       <button class="btn btn-sm btn-outline" onclick="scheduleModal()">+ 新增</button></div>
     <div id="scheduleList">${renderScheduleList()}</div>
   </div>`;
-  // 每日任务已自动合并进周计划（历史每日任务按星期几迁移，无需重复填写）
+  // migrateDailyToWeekly 只做一次性搬运（有 DB.tasks 才执行），不放 renderPlan 里也安全
   migrateDailyToWeekly();
-  // 新周自动重置：检测本周一日期，与上次记录对比，新的一周把所有 done 重置为 false
-  resetWeekDoneIfNeeded(monday);
+  // 注意：resetWeekDoneIfNeeded 已移到 syncPullAndMerge 后和 init 延迟中执行，
+  // 不在 renderPlan 里调用——防止同步前用旧的 lastWeekMonday 误重置，
+  // 导致 done=false(updatedAt=now) 比云端 done=true 更新，合并时覆盖平板数据
   const weekHtml = `<div class="card">
     <div class="card-title"><span class="left"><span class="emoji">🗓️</span>周计划</span>
       <button class="btn btn-sm btn-ghost" onclick="weekClearDone()">清理已完成</button></div>
@@ -4372,7 +4373,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.06 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.07 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
@@ -5460,6 +5461,13 @@ function init(){
   setTimeout(()=>restoreScrollPos(lastTab),150);
   // 检查定时推送
   setTimeout(checkScheduledPush,1000);
+  // 延迟执行新周重置（等同步合并后再用合并后的 lastWeekMonday 判断；
+  // 同步失败/关闭时也能兜底，不会用旧值误重置后覆盖云端）
+  setTimeout(()=>{
+    const _now=new Date(), _wi=_now.getDay();
+    const _monday=new Date(_now); _monday.setDate(_now.getDate()-(_wi===0?6:_wi-1));
+    resetWeekDoneIfNeeded(_monday);
+  },3000);
   // 先恢复已选备份文件夹（IndexedDB句柄），再检查自动云备份
   setTimeout(async ()=>{
     try{
@@ -5825,6 +5833,10 @@ function mergeLocalCloud(local, cloud){
   }
   mergedSettings.lastModified = Math.max(ls.lastModified||0, cs.lastModified||0);
   if(ls.lastSyncTimeTs) mergedSettings.lastSyncTimeTs = ls.lastSyncTimeTs;
+  // lastWeekMonday：取最新值（字符串日期比较），防止手机旧值覆盖平板新值导致误重置
+  if(cs.lastWeekMonday && ls.lastWeekMonday){
+    mergedSettings.lastWeekMonday = cs.lastWeekMonday > ls.lastWeekMonday ? cs.lastWeekMonday : ls.lastWeekMonday;
+  }
   merged.settings = mergedSettings;
   return merged;
 }
@@ -5957,6 +5969,11 @@ async function syncPullAndMerge(){
     if(!Array.isArray(DB.pushHistory)) DB.pushHistory=[];
     if(!DB.settings||typeof DB.settings!=='object') DB.settings={};
     DB.settings.lastSyncTime = new Date().toLocaleString('zh-CN');
+    // 同步合并后执行新周重置（用合并后的 lastWeekMonday，避免用旧值误重置）
+    const _now = new Date();
+    const _wi = _now.getDay();
+    const _monday = new Date(_now); _monday.setDate(_now.getDate() - (_wi===0?6:_wi-1));
+    resetWeekDoneIfNeeded(_monday);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(DB));
     setSyncState('connected');
     updateSyncBadge();
