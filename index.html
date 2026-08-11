@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.02</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.03</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -3791,27 +3791,47 @@ async function renderAccu(){
       // 也显示KB中的时政条目（如果有），按话题分组随机抽取
       const kbItems=DB.knowledge.filter(k=>cat.cats.includes(k.cat));
       if(kbItems.length){
-        // 复用常识/政治理论的解析逻辑：按话题分组，随机选一个话题抽5条
+        // 复用常识/政治理论的解析逻辑：按双换行分段，每段是一个完整知识点
         const tzTopics=[];
         let tzCur=null, tzItems=[];
+        const tzBlocks=[];
         kbItems.forEach(k=>{
-          const paragraphs=(k.content||'').split(/\n+/).map(l=>l.replace(/^[▼▷▶\s#*]+/,'').replace(/[*#]+$/,'').trim()).filter(Boolean);
-          for(const line of paragraphs){
-            if(/^[一二三四五六七八九十]+[、，]/.test(line)){
-              if(tzCur&&tzItems.length) tzTopics.push({topic:tzCur, items:tzItems});
-              tzCur=line; tzItems=[]; continue;
-            }
-            const m2=line.match(/^[（(][一二三四五六七八九十\d]+[）)]\s*(.+)$/);
-            if(m2){
-              if(tzCur&&tzItems.length) tzTopics.push({topic:tzCur, items:tzItems});
-              tzCur=m2[1].trim(); tzItems=[]; continue;
-            }
-            const m3=line.match(/^\d+[\.、]\s*(.+)$/);
-            if(m3 && m3[1].length>=4){ tzItems.push(m3[1].trim()); continue; }
-            if(line.length<6) continue;
-            tzItems.push(line);
-          }
+          const blocks=(k.content||'').split(/\n{2,}/);
+          blocks.forEach(b=>{
+            const lines=b.split(/\n/).map(l=>l.replace(/^[▼▷▶\s#*·•◦-]+/,'').replace(/[*#]+$/,'').trim()).filter(Boolean);
+            if(lines.length) tzBlocks.push(lines);
+          });
         });
+        for(const lines of tzBlocks){
+          const first=lines[0];
+          if(/^[一二三四五六七八九十]+[、，]/.test(first)){
+            if(tzCur&&tzItems.length) tzTopics.push({topic:tzCur, items:tzItems});
+            tzCur=first; tzItems=[];
+            if(lines.length>1){
+              const rest=lines.slice(1).join('\n');
+              if(rest.length>=6) tzItems.push(rest);
+            }
+            continue;
+          }
+          const m2=first.match(/^[（(][一二三四五六七八九十\d]+[）)]\s*(.+)$/);
+          if(m2){
+            if(tzCur&&tzItems.length) tzTopics.push({topic:tzCur, items:tzItems});
+            tzCur=m2[1].trim(); tzItems=[];
+            if(lines.length>1){
+              const rest=lines.slice(1).join('\n');
+              if(rest.length>=6) tzItems.push(rest);
+            }
+            continue;
+          }
+          const m3=first.match(/^\d+[\.、]\s*(.+)$/);
+          let itemText;
+          if(m3){
+            itemText=[m3[1].trim(), ...lines.slice(1)].join('\n');
+          }else{
+            itemText=lines.join('\n');
+          }
+          if(itemText.length>=6) tzItems.push(itemText);
+        }
         if(tzCur&&tzItems.length) tzTopics.push({topic:tzCur, items:tzItems});
         if(tzTopics.length){
           const rich=tzTopics.filter(t=>t.items.length>=5);
@@ -3821,7 +3841,7 @@ async function renderAccu(){
           const picked=seededShuffle(t.items,seed+11).slice(0,5);
           if(picked.length){
             cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>时政积累</span><span class="section-tag">${escapeHtml(t.topic)}</span></div>
-            ${picked.map(p=>`<div style="padding:4px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);">${escapeHtml(p)}</div>`).join('')}</div>`;
+            ${picked.map(p=>`<div style="padding:4px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);white-space:pre-wrap;">${escapeHtml(p)}</div>`).join('')}</div>`;
           }
         }
       }
@@ -3847,8 +3867,8 @@ async function renderAccu(){
           let sectionHtml='';
           for(const [type,arr] of Object.entries(t.sections)){
             if(!arr||!arr.length) continue;
-            // 案例类：过滤纯空案例，有内容的原样保留
-            const filtered=(type==='案例举证'||type==='案例')?arr.filter(x=>isCaseValid(x)):arr;
+            // 案例类：过滤纯空案例，有内容的清理结尾空"→可论证："后保留
+            const filtered=(type==='案例举证'||type==='案例')?arr.filter(x=>isCaseValid(x)).map(x=>cleanCaseTail(x)):arr;
             if(!filtered.length) continue;
             const p2=seededShuffle(filtered,seed+31).slice(0,2);
             sectionHtml+=`<details open style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--text);cursor:pointer;padding:4px 0;">${escapeHtml(type)}</summary><div style="padding:4px 0 6px;">${p2.map(x=>`<div style="font-size:12px;color:var(--text);line-height:1.7;padding:2px 0;">${escapeHtml(x)}</div>`).join('')}</div></details>`;
@@ -3867,37 +3887,54 @@ async function renderAccu(){
         }
       }
     } else {
-      // 常识/政治理论/面试：按话题分组，每天随机选一个话题，抽5条知识点（类似言语素材风格）
-      // 代理抓取会去掉 # 编号符号和 1. 列表序号，内容变成纯段落（\n\n 分隔）
-      // 解析逻辑：用「一、xxx」「（一）xxx」标题分话题，话题下收集所有≥6字的段落为知识点
+      // 常识/政治理论/面试：按话题分组，每天随机选一个话题，抽5条知识点
+      // 代理抓取后内容为纯段落（\n\n 分隔），同一知识点可能有多行（编号+子项）
+      // 解析逻辑：按双换行分段，每段是一个完整知识点（可能含多行子项）
       const topics=[];
       let curTopic=null, curItems=[];
+      // 收集所有段落块
+      const allBlocks=[];
       items.forEach(k=>{
-        const paragraphs=(k.content||'').split(/\n+/).map(l=>l.replace(/^[▼▷▶\s#*]+/,'').replace(/[*#]+$/,'').trim()).filter(Boolean);
-        for(const line of paragraphs){
-          // 一级标题：一、经济常识
-          if(/^[一二三四五六七八九十]+[、，]/.test(line)){
-            if(curTopic&&curItems.length) topics.push({topic:curTopic, items:curItems});
-            curTopic=line; curItems=[]; continue;
-          }
-          // 二级标题：（一）宪法
-          const m2=line.match(/^[（(][一二三四五六七八九十\d]+[）)]\s*(.+)$/);
-          if(m2){
-            if(curTopic&&curItems.length) topics.push({topic:curTopic, items:curItems});
-            curTopic=m2[1].trim(); curItems=[]; continue;
-          }
-          // 编号列表（代理保留编号时）：1. xxx
-          const m3=line.match(/^\d+[\.、]\s*(.+)$/);
-          if(m3 && m3[1].length>=4){
-            curItems.push(m3[1].trim());
-            continue;
-          }
-          // 跳过短行（子标题/标签，如"国家机关""唯物论"等）
-          if(line.length<6) continue;
-          // 收集为知识点
-          curItems.push(line);
-        }
+        const blocks=(k.content||'').split(/\n{2,}/);
+        blocks.forEach(b=>{
+          const lines=b.split(/\n/).map(l=>l.replace(/^[▼▷▶\s#*·•◦-]+/,'').replace(/[*#]+$/,'').trim()).filter(Boolean);
+          if(lines.length) allBlocks.push(lines);
+        });
       });
+      for(const lines of allBlocks){
+        const first=lines[0];
+        // 一级标题：一、经济常识
+        if(/^[一二三四五六七八九十]+[、，]/.test(first)){
+          if(curTopic&&curItems.length) topics.push({topic:curTopic, items:curItems});
+          curTopic=first; curItems=[];
+          // 标题块可能后面还有内容行
+          if(lines.length>1){
+            const rest=lines.slice(1).join('\n');
+            if(rest.length>=6) curItems.push(rest);
+          }
+          continue;
+        }
+        // 二级标题：（一）宪法
+        const m2=first.match(/^[（(][一二三四五六七八九十\d]+[）)]\s*(.+)$/);
+        if(m2){
+          if(curTopic&&curItems.length) topics.push({topic:curTopic, items:curItems});
+          curTopic=m2[1].trim(); curItems=[];
+          if(lines.length>1){
+            const rest=lines.slice(1).join('\n');
+            if(rest.length>=6) curItems.push(rest);
+          }
+          continue;
+        }
+        // 内容块：去掉首行编号前缀，所有行合并为一个知识点
+        const m3=first.match(/^\d+[\.、]\s*(.+)$/);
+        let itemText;
+        if(m3){
+          itemText=[m3[1].trim(), ...lines.slice(1)].join('\n');
+        }else{
+          itemText=lines.join('\n');
+        }
+        if(itemText.length>=6) curItems.push(itemText);
+      }
       if(curTopic&&curItems.length) topics.push({topic:curTopic, items:curItems});
 
       if(topics.length){
@@ -3909,7 +3946,7 @@ async function renderAccu(){
         const picked=seededShuffle(t.items,seed+51).slice(0,5);
         cards+=`<div class="card">
           <div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span class="section-tag">${escapeHtml(t.topic)}</span></div>
-          ${picked.map(p=>`<div style="padding:4px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);">${escapeHtml(p)}</div>`).join('')}
+          ${picked.map(p=>`<div style="padding:4px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);white-space:pre-wrap;">${escapeHtml(p)}</div>`).join('')}
         </div>`;
       }
     }
@@ -4819,9 +4856,10 @@ async function forceRefreshPush(){
   }
 }
 /* 检查案例是否有实际内容（过滤纯空案例）。
-   "案例一：红旗渠...苦干实干…… → 可论证：艰苦奋斗 → 可论证：" → 有内容，返回 true（原样保留）
+   "案例一：红旗渠...苦干实干…… → 可论证：艰苦奋斗 → 可论证：" → 有内容，返回 true
    "案例二：→ 可论证：" → 纯空，返回 false（跳过）
-   完整案例从头到尾原封不动保留，不删任何内容。 */
+   完整案例正文保留，但结尾空的"→ 可论证："（冒号后无内容）要清理掉，
+   有内容的"→ 可论证：xxx"保留。 */
 function isCaseValid(text){
   if(!text) return false;
   const s=text.trim();
@@ -4830,6 +4868,20 @@ function isCaseValid(text){
   // 去掉所有"→ 可论证：xxx"模板占位符后看还剩什么
   const real=after.replace(/→\s*可论证[：:][^\n]*/g,'').replace(/[→\s]/g,'').trim();
   return real.length>=4;
+}
+/* 清理案例文本：去掉结尾空的"→ 可论证："（冒号后无内容或只有空白），
+   有内容的"→ 可论证：xxx"保留不动。
+   例如："案例正文…… → 可论证：精准识别需求 → 可论证： → 可论证："
+   清理后："案例正文…… → 可论证：精准识别需求" */
+function cleanCaseTail(text){
+  if(!text) return text;
+  // 把所有"→ 可论证："按顺序处理，只保留有内容的
+  // 用[^→]*防止匹配跨越到下一个→可论证
+  return text.replace(/→\s*可论证[：:]\s*([^→\n]*)/g, (match, after)=>{
+    const content=after.trim();
+    if(content) return match; // 有内容的原样保留
+    return ''; // 空的删掉
+  }).replace(/\s+$/,'').trim(); // 清理结尾多余空白
 }
 /* 智能解析申论素材（兼容Word导出格式：子分类标题无【】、跳过"用途"行）
    返回结构化数组：[{topic:'高质量发展', sections:{'开篇金句':[...],'分论点框架':[...],...}}] */
@@ -4901,6 +4953,8 @@ function parseShenlunContent(records){
             curSections[type].push(line);
           }
         }else{
+          // 跳过空的"→ 可论证："（冒号后无内容），有内容的保留
+          if(/^→\s*可论证[：:]\s*$/.test(line)) continue;
           if(curSections[type].length) curSections[type][curSections[type].length-1]+='\n'+line;
           else curSections[type].push(line);
         }
@@ -4920,11 +4974,13 @@ function pickSection(results, types){
       (r.sections[t]||[]).forEach(x=>{
         const clean=x.trim();
         if(clean.length<6) return; // 太短跳过
-        // 案例类：纯空案例跳过，有内容的原样保留
+        // 案例类：纯空案例跳过，有内容的清理结尾空"→可论证："后保留
         if(/^案例[一二三四五六七八九十\d]+[：:]/.test(clean)){
           if(!isCaseValid(clean)) return; // 空案例跳过
+          items.push(cleanCaseTail(clean));
+        }else{
+          items.push(clean);
         }
-        items.push(clean);
       });
     });
   });
