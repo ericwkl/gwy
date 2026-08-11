@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.03</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.05</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -607,7 +607,7 @@ function renderHome(){
     <div class="card-title"><span class="left"><span class="emoji">🔁</span>待复习易错考点</span>
       <div style="display:flex;gap:6px;">
         <button class="btn btn-sm btn-ghost" onclick="showAllMistakeEbb()">全部</button>
-        <button class="btn btn-sm btn-ghost" onclick="goToMistakeManage()">管理</button>
+        <button class="btn btn-sm btn-ghost" onclick="mistakeListModal()">管理</button>
         <button class="btn btn-sm btn-outline" onclick="mistakeModal()">+ 考点</button>
       </div></div>
     <div style="font-size:11px;color:var(--text-light);margin:-4px 0 4px;">艾宾浩斯 · 按 1/2/4/7/15 天复习，点「已掌握」进入下一轮，完成5轮彻底记住</div>
@@ -801,19 +801,60 @@ function setEbbMkFilter(k){
   ebbMkFilter=k;
   closeModal(); showAllMistakeEbb();
 }
-/* 跳转到设置页的「易错考点管理」区域（不用手动下滑） */
-function goToMistakeManage(){
-  navTo('settings');
-  setTimeout(()=>{
-    const c=document.querySelector('.app-content');
-    const el=[...document.querySelectorAll('#page-settings div, #page-settings span')].find(e=>/^⚠️\s*易错考点管理$/.test((e.textContent||'').trim()));
-    if(el){ el.scrollIntoView({block:'start'}); }
-    else if(c){ c.scrollTop=c.scrollHeight; }
-  },80);
+/* 易错考点本弹窗（全部考点，类似错题本，从主页「管理」进入） */
+let mkListFilter='';
+let _mkListScroll=0; // 考点本滚动位置记忆（详情返回时恢复）
+let _detailReturnFnMistake=null;
+function mistakeListModal(){
+  _detailReturnFnMistake='mistakeListModal';
+  const tags=[['','全部']].concat(MODULES.map(m=>[m.key,m.name]))
+    .map(([k,n])=>`<span class="tag ${mkListFilter===k?'on':''}" data-k="${k}" onclick="setMkListFilter('${k}')">${k?MODULES.find(m=>m.key===k).icon+' ':''}${n}</span>`).join('');
+  openModal(`<div class="modal-head"><h3>⚠️ 易错考点本（${(DB.mistakes||[]).length}条）</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div style="font-size:11px;color:var(--text-light);margin-bottom:6px;">点标签筛选模块 · 点考点查看详情</div>
+    <div class="tag-list">${tags}</div>
+    <div id="mkFullList" style="max-height:55vh;overflow-y:auto;">${renderFullMistakeList()}</div>
+    <div class="modal-foot"><button class="btn btn-outline" style="flex:1" onclick="closeModal()">关闭</button></div>`);
+  if(_mkListScroll>0){
+    setTimeout(()=>{
+      const box=document.getElementById('modalBox');
+      if(box){ box.scrollTop=_mkListScroll; _mkListScroll=0; }
+    },60);
+  }
+}
+function setMkListFilter(k){
+  mkListFilter=k;
+  const box=document.getElementById('mkFullList');
+  if(box) box.innerHTML=renderFullMistakeList();
+  document.querySelectorAll('#modalBox .tag').forEach(t=>{
+    t.classList.toggle('on', t.getAttribute('data-k')===k);
+  });
+}
+function renderFullMistakeList(){
+  let list=[...(DB.mistakes||[])].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  if(!list.length) return '<div class="empty-state"><div class="emoji">⚠️</div><div class="txt">暂无易错考点<br>点击「添加考点」或「从错题导入」</div></div>';
+  if(mkListFilter){
+    list=list.filter(m=>m.module===mkListFilter);
+    if(!list.length) return '<div class="empty-state"><div class="emoji">⚠️</div><div class="txt">该分类暂无考点</div></div>';
+  }
+  return list.map(m=>{
+    const mod=MODULES.find(x=>x.key===m.module)||MODULES.find(x=>x.name===m.module);
+    const st=getMistakeEbb(m);
+    const round=st.done?'✅完成':('第'+(st.stage+1)+'轮');
+    return `<div style="cursor:pointer;display:flex;align-items:flex-start;gap:6px;padding:9px 10px;border-bottom:1px solid var(--border);" onclick="viewMistakeDetail('${m.id}')">
+      <span style="flex-shrink:0;font-size:10px;padding:1px 6px;border-radius:6px;background:var(--warning-soft);color:var(--warning);white-space:nowrap;">${mod?mod.name:'未分类'}${m.sub?'·'+m.sub:''}</span>
+      <span style="flex-shrink:0;font-size:10px;color:var(--accent);background:var(--accent-soft);padding:0 6px;border-radius:6px;white-space:nowrap;">${round}</span>
+      <span style="flex:1;min-width:0;font-size:12px;color:var(--text);white-space:pre-wrap;word-break:break-all;">${escapeHtml(m.point||'')}</span>
+      <span style="font-size:10px;color:var(--text-light);flex-shrink:0;">${m.date||''}</span>
+      <span style="color:var(--text-light);font-size:11px;flex-shrink:0;">›</span>
+    </div>`;
+  }).join('');
 }
 /* 易错考点详情弹窗（主页待复习点开进入，可编辑/删除/返回） */
-let _detailReturnFnMistake=null;
 function viewMistakeDetail(id){
+  if(_detailReturnFnMistake){
+    const box=document.getElementById('modalBox');
+    if(box) _mkListScroll=box.scrollTop;
+  }
   const m=DB.mistakes.find(x=>x.id===id);
   if(!m) return;
   const st=getMistakeEbb(m);
@@ -3538,6 +3579,8 @@ function closeModal(){
     return;
   }
   document.getElementById('modalMask').classList.remove('show');
+  _detailReturnFn=null;
+  _detailReturnFnMistake=null;
 }
 /* 试卷分析报告：飞书链接抓取 */
 async function paperImportFeishu(){
@@ -3788,51 +3831,44 @@ async function renderAccu(){
         newsSections=`<details open style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--primary);cursor:pointer;padding:4px 0;">近期热点</summary><div>${hot.map(h=>`<div style="padding:3px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);">${linkify('· ['+h.date+'] '+h.title+(h.url?'\n  '+h.url:''))}</div>`).join('')}</div></details>`;
         cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span class="section-tag">近期</span></div>${newsSections}</div>`;
       }
-      // 也显示KB中的时政条目（如果有），按话题分组随机抽取
+      // 也显示KB中的时政条目（如果有），逐行解析同常识/政治理论
       const kbItems=DB.knowledge.filter(k=>cat.cats.includes(k.cat));
       if(kbItems.length){
-        // 复用常识/政治理论的解析逻辑：按双换行分段，每段是一个完整知识点
         const tzTopics=[];
-        let tzCur=null, tzItems=[];
-        const tzBlocks=[];
+        let tzCur=null, tzItems=[], tzCurItem=null;
         kbItems.forEach(k=>{
-          const blocks=(k.content||'').split(/\n{2,}/);
-          blocks.forEach(b=>{
-            const lines=b.split(/\n/).map(l=>l.replace(/^[▼▷▶\s#*·•◦-]+/,'').replace(/[*#]+$/,'').trim()).filter(Boolean);
-            if(lines.length) tzBlocks.push(lines);
-          });
+          const lines=(k.content||'').split(/\n/).map(l=>l.replace(/^[▼▷▶\s#*]+/,'').replace(/[*#]+$/,'').trim()).filter(Boolean);
+          for(const line of lines){
+            if(/^[一二三四五六七八九十]+[、，]/.test(line)){
+              if(tzCurItem){ tzItems.push(tzCurItem); tzCurItem=null; }
+              if(tzCur&&tzItems.length) tzTopics.push({topic:tzCur, items:tzItems});
+              tzCur=line; tzItems=[];
+              continue;
+            }
+            const m2=line.match(/^[（(][一二三四五六七八九十\d]+[）)]\s*(.+)$/);
+            if(m2){
+              if(tzCurItem){ tzItems.push(tzCurItem); tzCurItem=null; }
+              if(tzCur&&tzItems.length) tzTopics.push({topic:tzCur, items:tzItems});
+              tzCur=m2[1].trim(); tzItems=[];
+              continue;
+            }
+            const m3=line.match(/^\d+[\.、]\s*(.+)$/);
+            if(m3 && m3[1].length>=3){
+              if(tzCurItem){ tzItems.push(tzCurItem); }
+              tzCurItem=m3[1].trim();
+              continue;
+            }
+            const sub=line.replace(/^[-•◦·]\s*/,'').trim();
+            if(tzCurItem && sub.length>=2){
+              tzCurItem+='\n'+sub;
+            }else if(!tzCurItem && line.length>=6){
+              tzCurItem=line;
+            }
+          }
         });
-        for(const lines of tzBlocks){
-          const first=lines[0];
-          if(/^[一二三四五六七八九十]+[、，]/.test(first)){
-            if(tzCur&&tzItems.length) tzTopics.push({topic:tzCur, items:tzItems});
-            tzCur=first; tzItems=[];
-            if(lines.length>1){
-              const rest=lines.slice(1).join('\n');
-              if(rest.length>=6) tzItems.push(rest);
-            }
-            continue;
-          }
-          const m2=first.match(/^[（(][一二三四五六七八九十\d]+[）)]\s*(.+)$/);
-          if(m2){
-            if(tzCur&&tzItems.length) tzTopics.push({topic:tzCur, items:tzItems});
-            tzCur=m2[1].trim(); tzItems=[];
-            if(lines.length>1){
-              const rest=lines.slice(1).join('\n');
-              if(rest.length>=6) tzItems.push(rest);
-            }
-            continue;
-          }
-          const m3=first.match(/^\d+[\.、]\s*(.+)$/);
-          let itemText;
-          if(m3){
-            itemText=[m3[1].trim(), ...lines.slice(1)].join('\n');
-          }else{
-            itemText=lines.join('\n');
-          }
-          if(itemText.length>=6) tzItems.push(itemText);
-        }
+        if(tzCurItem){ tzItems.push(tzCurItem); }
         if(tzCur&&tzItems.length) tzTopics.push({topic:tzCur, items:tzItems});
+        if(!tzCur && tzItems.length) tzTopics.push({topic:'知识点', items:tzItems});
         if(tzTopics.length){
           const rich=tzTopics.filter(t=>t.items.length>=5);
           const pool=rich.length?rich:tzTopics.filter(t=>t.items.length>=2);
@@ -3887,55 +3923,51 @@ async function renderAccu(){
         }
       }
     } else {
-      // 常识/政治理论/面试：按话题分组，每天随机选一个话题，抽5条知识点
-      // 代理抓取后内容为纯段落（\n\n 分隔），同一知识点可能有多行（编号+子项）
-      // 解析逻辑：按双换行分段，每段是一个完整知识点（可能含多行子项）
+      // 常识/政治理论/面试：逐行解析，编号行(1. 2. 等)开始新知识点，
+      // 后续非编号行（子项、缩进行）追加到当前知识点
       const topics=[];
-      let curTopic=null, curItems=[];
-      // 收集所有段落块
-      const allBlocks=[];
+      let curTopic=null, curItems=[], curItem=null;
       items.forEach(k=>{
-        const blocks=(k.content||'').split(/\n{2,}/);
-        blocks.forEach(b=>{
-          const lines=b.split(/\n/).map(l=>l.replace(/^[▼▷▶\s#*·•◦-]+/,'').replace(/[*#]+$/,'').trim()).filter(Boolean);
-          if(lines.length) allBlocks.push(lines);
-        });
+        const lines=(k.content||'').split(/\n/).map(l=>l.replace(/^[▼▷▶\s#*]+/,'').replace(/[*#]+$/,'').trim()).filter(Boolean);
+        for(const line of lines){
+          // 一级标题：一、经济常识
+          if(/^[一二三四五六七八九十]+[、，]/.test(line)){
+            if(curItem){ curItems.push(curItem); curItem=null; }
+            if(curTopic&&curItems.length) topics.push({topic:curTopic, items:curItems});
+            curTopic=line; curItems=[];
+            continue;
+          }
+          // 二级标题：（一）宪法
+          const m2=line.match(/^[（(][一二三四五六七八九十\d]+[）)]\s*(.+)$/);
+          if(m2){
+            if(curItem){ curItems.push(curItem); curItem=null; }
+            if(curTopic&&curItems.length) topics.push({topic:curTopic, items:curItems});
+            curTopic=m2[1].trim(); curItems=[];
+            continue;
+          }
+          // 编号内容行：1. xxx 或 1、 xxx → 开始新知识点
+          const m3=line.match(/^\d+[\.、]\s*(.+)$/);
+          if(m3 && m3[1].length>=3){
+            // 先保存上一个知识点
+            if(curItem){ curItems.push(curItem); }
+            curItem=m3[1].trim();
+            continue;
+          }
+          // 子项行：以 - • ◦ 开头，或缩进内容，或短行 → 追加到当前知识点
+          const sub=line.replace(/^[-•◦·]\s*/,'').trim();
+          if(curItem && sub.length>=2){
+            curItem+='\n'+sub;
+          }else if(!curItem && line.length>=6){
+            // 没有编号前缀的独立内容行，直接作为知识点
+            curItem=line;
+          }
+        }
       });
-      for(const lines of allBlocks){
-        const first=lines[0];
-        // 一级标题：一、经济常识
-        if(/^[一二三四五六七八九十]+[、，]/.test(first)){
-          if(curTopic&&curItems.length) topics.push({topic:curTopic, items:curItems});
-          curTopic=first; curItems=[];
-          // 标题块可能后面还有内容行
-          if(lines.length>1){
-            const rest=lines.slice(1).join('\n');
-            if(rest.length>=6) curItems.push(rest);
-          }
-          continue;
-        }
-        // 二级标题：（一）宪法
-        const m2=first.match(/^[（(][一二三四五六七八九十\d]+[）)]\s*(.+)$/);
-        if(m2){
-          if(curTopic&&curItems.length) topics.push({topic:curTopic, items:curItems});
-          curTopic=m2[1].trim(); curItems=[];
-          if(lines.length>1){
-            const rest=lines.slice(1).join('\n');
-            if(rest.length>=6) curItems.push(rest);
-          }
-          continue;
-        }
-        // 内容块：去掉首行编号前缀，所有行合并为一个知识点
-        const m3=first.match(/^\d+[\.、]\s*(.+)$/);
-        let itemText;
-        if(m3){
-          itemText=[m3[1].trim(), ...lines.slice(1)].join('\n');
-        }else{
-          itemText=lines.join('\n');
-        }
-        if(itemText.length>=6) curItems.push(itemText);
-      }
+      // 收尾
+      if(curItem){ curItems.push(curItem); }
       if(curTopic&&curItems.length) topics.push({topic:curTopic, items:curItems});
+      // 无话题标题时也保留
+      if(!curTopic && curItems.length) topics.push({topic:'知识点', items:curItems});
 
       if(topics.length){
         // 优先选有≥5条知识点的话题，确保抽取效果好
@@ -4131,8 +4163,8 @@ async function importFeishu(){
 }
 /* 设置页飞书导入：抓取后直接打开新增弹窗并填入内容 */
 async function importFeishuToSettings(){
-  const url=document.getElementById('kb_feishu_url').value.trim();
-  const status=document.getElementById('kb_feishu_status');
+  const url=document.getElementById('kb_feishu_url_settings').value.trim();
+  const status=document.getElementById('kb_feishu_status_settings');
   if(!url){ toast('请粘贴链接'); return; }
   if(!/feishu\.cn|larksuite\.com/.test(url)){ toast('请粘贴飞书文档链接'); return; }
   status.textContent='正在抓取文档...';
@@ -4293,15 +4325,6 @@ function renderSettings(){
       </div>
     </div>
     <div class="card">
-      <div class="card-title"><span class="left"><span class="emoji">⚠️</span>易错考点管理</span>
-        <button class="btn btn-sm" onclick="mistakeModal()">+ 添加</button></div>
-      <div id="mistakeList" style="max-height:280px;overflow-y:auto;">${renderMistakeList()}</div>
-      <div style="margin-top:6px;padding-top:8px;border-top:1px solid var(--border);">
-        <button class="btn btn-sm btn-outline btn-full" onclick="importMistakesFromErrors()">从错题知识点导入</button>
-        <div style="font-size:11px;color:var(--text-light);margin-top:4px;text-align:center;">自动提取错题记录中的"知识点与思考"为易错考点</div>
-      </div>
-    </div>
-    <div class="card">
       <div class="card-title"><span class="left"><span class="emoji">📥</span>知识库管理</span>
         <div style="display:flex;gap:6px;">
           <button class="btn btn-sm btn-outline" onclick="kbCatModal()">+ 分类</button>
@@ -4314,10 +4337,10 @@ function renderSettings(){
         <div style="font-size:11px;color:var(--text-light);margin-bottom:8px;">在新增/编辑弹窗中上传 Word 文档自动填充内容</div>
         <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:4px;">🔗 飞书文档链接导入</div>
         <div class="form-row" style="margin-top:4px;">
-          <input id="kb_feishu_url" placeholder="粘贴飞书文档链接" style="flex:2;font-size:12px;">
+          <input id="kb_feishu_url_settings" placeholder="粘贴飞书文档链接" style="flex:2;font-size:12px;">
           <button class="btn btn-outline" style="flex:1" onclick="importFeishuToSettings()">抓取</button>
         </div>
-        <div id="kb_feishu_status" style="font-size:11px;color:var(--text-soft);margin-top:4px;">支持 feishu.cn / larksuite.com 文档链接，自动抓取正文</div>
+        <div id="kb_feishu_status_settings" style="font-size:11px;color:var(--text-soft);margin-top:4px;">支持 feishu.cn / larksuite.com 文档链接，自动抓取正文</div>
       </div>
     </div>
     <div class="card">
@@ -4347,25 +4370,10 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.1.88 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.05 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
-/* 易错考点渲染与操作 */
-function renderMistakeList(){
-  if(!DB.mistakes||!DB.mistakes.length) return '<div class="empty-state" style="padding:16px;"><div class="txt">暂无易错考点，点击"添加"或从错题导入</div></div>';
-  return DB.mistakes.map(m=>{
-    // 兼容：module 可能是 key(yy) 或中文名(言语理解)
-    const mod=MODULES.find(x=>x.key===m.module)||MODULES.find(x=>x.name===m.module);
-    return `<div style="display:flex;align-items:flex-start;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);">
-      <div style="flex-shrink:0;font-size:11px;padding:2px 8px;border-radius:10px;background:var(--primary-soft);color:var(--primary);">${mod?mod.name:'未分类'}${m.sub?' · '+m.sub:''}</div>
-      <div style="flex:1;min-width:0;font-size:12px;color:var(--text);white-space:pre-wrap;word-break:break-all;">${escapeHtml(m.point||'')}${m.note?`<div style="font-size:11px;color:var(--text-soft);margin-top:2px;">${escapeHtml(m.note)}</div>`:''}</div>
-      <div style="display:flex;gap:4px;flex-shrink:0;">
-        <button class="task-del" style="font-size:12px;" onclick="mistakeModal('${m.id}')">编辑</button>
-        <button class="task-del" onclick="delMistake('${m.id}')">✕</button>
-      </div>
-    </div>`;
-  }).join('');
-}
+/* 易错考点操作 */
 let _mistakeEditSub='';
 let _mistakePhotos=[];
 function mistakeModal(id){
@@ -4438,9 +4446,12 @@ async function saveMistakeAsync(id, module, sub, point, note){
     DB.mistakeEbb[m.id]={stage:0, base:todayStr(), next:todayStr(), done:false};
   }
   saveDB();
-  // 编辑后返回详情弹窗（不退回主页）；新增则关闭回原页面
-  if(id){ viewMistakeDetail(id); }
-  else{ closeModal(); renderPage(currentPageName()); }
+  // 编辑后返回详情弹窗（不退回主页）；新增则回考点本列表
+  const fn=_detailReturnFnMistake;
+  closeModal();
+  if(id){ _detailReturnFnMistake=fn; viewMistakeDetail(id); }
+  else if(fn){ setTimeout(()=>window[fn](),50); }
+  else{ renderPage(currentPageName()); }
   toast('已保存');
 }
 function delMistake(id){
@@ -4448,7 +4459,11 @@ function delMistake(id){
   markDeleted('mistakes', id);
   DB.mistakes=DB.mistakes.filter(x=>x.id!==id);
   if(DB.mistakeEbb) delete DB.mistakeEbb[id];
-  saveDB(); renderPage(currentPageName());
+  const fn=_detailReturnFnMistake;
+  saveDB(); closeModal();
+  if(fn){ setTimeout(()=>window[fn](),50); }
+  else{ renderPage(currentPageName()); }
+  toast('已删除');
 }
 /* 从错题的知识点字段导入易错考点（去重，并保留"复习提醒"，支持多行+兜底） */
 function importMistakesFromErrors(){
@@ -4498,7 +4513,9 @@ function importMistakesFromErrors(){
   });
   // 导入后去重：清理完全重复的考点（保留复习轮次更多的）
   dedupMistakes();
-  saveDB(); renderSettings();
+  saveDB();
+  const fn=_detailReturnFnMistake;
+  if(fn){ closeModal(); setTimeout(()=>window[fn](),50); }
   toast('已导入'+added+'条易错考点'+(updated?'，补充复习提醒'+updated+'条':''));
 }
 /* 去重易错考点：同模块+同知识点首行视为重复，保留复习轮次（stage）更大的那条 */
