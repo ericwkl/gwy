@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.01</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.02</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -915,6 +915,8 @@ function renderPlan(){
   </div>`;
   // 每日任务已自动合并进周计划（历史每日任务按星期几迁移，无需重复填写）
   migrateDailyToWeekly();
+  // 新周自动重置：检测本周一日期，与上次记录对比，新的一周把所有 done 重置为 false
+  resetWeekDoneIfNeeded(monday);
   const weekHtml = `<div class="card">
     <div class="card-title"><span class="left"><span class="emoji">🗓️</span>周计划</span>
       <button class="btn btn-sm btn-ghost" onclick="weekClearDone()">清理已完成</button></div>
@@ -942,6 +944,24 @@ function migrateDailyToWeekly(){
     // 一次性搬运完成：清空每日任务（此后统一用周计划管理，删除/清理不会复活）
     DB.tasks=[];
     saveDB();
+  }
+}
+/* 新周自动重置：本周一日期与上次记录不同时，把所有 weekTasks 的 done 重置为 false。
+   记录本周一日期到 DB.settings.lastWeekMonday，防止重复重置。 */
+function resetWeekDoneIfNeeded(monday){
+  const mondayStr=localDateStr(monday);
+  if(!DB.settings) DB.settings={};
+  if(DB.settings.lastWeekMonday !== mondayStr){
+    let changed=false;
+    (DB.weekTasks||[]).forEach(t=>{
+      if(t.done){
+        t.done=false;
+        t.updatedAt=Date.now();
+        changed=true;
+      }
+    });
+    DB.settings.lastWeekMonday=mondayStr;
+    if(changed) saveDB();
   }
 }
 /* 周计划：横向星期选择（今天默认选中），下方显示当天任务 */
@@ -985,11 +1005,18 @@ function renderWeekDayList(days){
     ${rows}
   </div>`;
 }
-/* 清理所有已完成任务（周计划） */
+/* 清理已完成任务：取消勾选状态（不删除任务），重置为新一周 */
 function weekClearDone(){
-  if(!confirm('清除周计划中所有已勾选完成的任务？')) return;
-  DB.weekTasks=DB.weekTasks.filter(t=>!t.done);
-  saveDB(); renderPlan(); toast('已清理完成的任务');
+  const doneCount=(DB.weekTasks||[]).filter(t=>t.done).length;
+  if(!doneCount){ toast('没有已完成的任务'); return; }
+  if(!confirm('取消所有已勾选完成的任务状态？（'+doneCount+'项，任务不删除，仅重置为未完成）')) return;
+  DB.weekTasks.forEach(t=>{
+    if(t.done){
+      t.done=false;
+      t.updatedAt=Date.now();
+    }
+  });
+  saveDB(); renderPlan(); toast('已重置 '+doneCount+' 项任务为未完成');
 }
 function weekTaskModal(day, id){
   let t=null;
@@ -1015,7 +1042,7 @@ function saveWeekTask(day, id){
 }
 function toggleWeekTask(id){
   const t=DB.weekTasks.find(x=>x.id===id);
-  if(t){ t.done=!t.done; saveDB(); renderPlan(); }
+  if(t){ t.done=!t.done; t.updatedAt=Date.now(); saveDB(); renderPlan(); }
 }
 function delWeekTask(id){
   if(!confirm('删除此任务？')) return;
