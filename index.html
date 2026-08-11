@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.05</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.06</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -602,9 +602,9 @@ function renderHome(){
     <div>${renderReviewList(5)}</div>
   </div>`;
 
-  // 今日待复习易错考点（艾宾浩斯，每日复盘下面）
+  // 今日待复习考点（艾宾浩斯，每日复盘下面）
   const mistakeEbbHtml = `<div class="card">
-    <div class="card-title"><span class="left"><span class="emoji">🔁</span>待复习易错考点</span>
+    <div class="card-title"><span class="left"><span class="emoji">🔁</span>待复习考点</span>
       <div style="display:flex;gap:6px;">
         <button class="btn btn-sm btn-ghost" onclick="showAllMistakeEbb()">全部</button>
         <button class="btn btn-sm btn-ghost" onclick="mistakeListModal()">管理</button>
@@ -685,7 +685,7 @@ function renderTodayErrorEbb(){
 function renderTodayMistakeEbb(){
   const today=todayStr();
   const mkts=(DB.mistakes||[]).filter(m=>{const st=getMistakeEbb(m); return !st.done && st.next<=today;});
-  if(!mkts.length) return '<div class="empty-state" style="padding:14px;"><div class="emoji">✅</div><div class="txt">今日无待复习易错考点</div></div>';
+  if(!mkts.length) return '<div class="empty-state" style="padding:14px;"><div class="emoji">✅</div><div class="txt">今日无待复习考点</div></div>';
   return mkts.slice(0,5).map(m=>{
     const st=getMistakeEbb(m);
     const mod=MODULES.find(x=>x.key===m.module)||MODULES.find(x=>x.name===m.module);
@@ -791,7 +791,7 @@ function showAllMistakeEbb(){
       <button class="btn btn-sm btn-outline" style="padding:2px 8px;font-size:11px;flex-shrink:0;" onclick="ebbMistakeAction('${m.id}','again')">待复习</button>
     </div>`;
   }).join('');
-  openModal(`<div class="modal-head"><h3>🔁 待复习易错考点（${list.length}条）</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
+  openModal(`<div class="modal-head"><h3>🔁 待复习考点（${list.length}条）</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div style="font-size:11px;color:var(--text-light);margin-bottom:6px;">点标签筛选模块</div>
     <div class="tag-list">${tags}</div>
     <div style="max-height:55vh;overflow-y:auto;">${rows||'<div class="empty-state">无待复习考点</div>'}</div>
@@ -801,7 +801,7 @@ function setEbbMkFilter(k){
   ebbMkFilter=k;
   closeModal(); showAllMistakeEbb();
 }
-/* 易错考点本弹窗（全部考点，类似错题本，从主页「管理」进入） */
+/* 考点本弹窗（全部考点，类似错题本，从主页「管理」进入） */
 let mkListFilter='';
 let _mkListScroll=0; // 考点本滚动位置记忆（详情返回时恢复）
 let _detailReturnFnMistake=null;
@@ -809,10 +809,10 @@ function mistakeListModal(){
   _detailReturnFnMistake='mistakeListModal';
   const tags=[['','全部']].concat(MODULES.map(m=>[m.key,m.name]))
     .map(([k,n])=>`<span class="tag ${mkListFilter===k?'on':''}" data-k="${k}" onclick="setMkListFilter('${k}')">${k?MODULES.find(m=>m.key===k).icon+' ':''}${n}</span>`).join('');
-  openModal(`<div class="modal-head"><h3>⚠️ 易错考点本（${(DB.mistakes||[]).length}条）</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
+  openModal(`<div class="modal-head"><h3>📒 考点本（${(DB.mistakes||[]).length}条）</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div style="font-size:11px;color:var(--text-light);margin-bottom:6px;">点标签筛选模块 · 点考点查看详情</div>
     <div class="tag-list">${tags}</div>
-    <div id="mkFullList" style="max-height:55vh;overflow-y:auto;">${renderFullMistakeList()}</div>
+    <div id="mkFullList">${renderFullMistakeList()}</div>
     <div class="modal-foot"><button class="btn btn-outline" style="flex:1" onclick="closeModal()">关闭</button></div>`);
   if(_mkListScroll>0){
     setTimeout(()=>{
@@ -831,25 +831,27 @@ function setMkListFilter(k){
 }
 function renderFullMistakeList(){
   let list=[...(DB.mistakes||[])].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
-  if(!list.length) return '<div class="empty-state"><div class="emoji">⚠️</div><div class="txt">暂无易错考点<br>点击「添加考点」或「从错题导入」</div></div>';
+  if(!list.length) return '<div class="empty-state"><div class="emoji">📒</div><div class="txt">暂无考点</div></div>';
   if(mkListFilter){
     list=list.filter(m=>m.module===mkListFilter);
-    if(!list.length) return '<div class="empty-state"><div class="emoji">⚠️</div><div class="txt">该分类暂无考点</div></div>';
+    if(!list.length) return '<div class="empty-state"><div class="emoji">📒</div><div class="txt">该分类暂无考点</div></div>';
   }
   return list.map(m=>{
     const mod=MODULES.find(x=>x.key===m.module)||MODULES.find(x=>x.name===m.module);
     const st=getMistakeEbb(m);
-    const round=st.done?'✅完成':('第'+(st.stage+1)+'轮');
-    return `<div style="cursor:pointer;display:flex;align-items:flex-start;gap:6px;padding:9px 10px;border-bottom:1px solid var(--border);" onclick="viewMistakeDetail('${m.id}')">
-      <span style="flex-shrink:0;font-size:10px;padding:1px 6px;border-radius:6px;background:var(--warning-soft);color:var(--warning);white-space:nowrap;">${mod?mod.name:'未分类'}${m.sub?'·'+m.sub:''}</span>
+    const round=st.done?'✅':'第'+(st.stage+1)+'轮';
+    const badge=mod?mod.icon+' '+mod.name+(m.sub?'·'+m.sub:''):'未分类';
+    const firstLine=(m.point||'').split('\n')[0].trim();
+    return `<div class="error-item" style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:9px 10px;" onclick="viewMistakeDetail('${m.id}')">
+      <span class="r-tag" style="flex-shrink:0;margin:0;font-size:10px;white-space:nowrap;">${badge}</span>
       <span style="flex-shrink:0;font-size:10px;color:var(--accent);background:var(--accent-soft);padding:0 6px;border-radius:6px;white-space:nowrap;">${round}</span>
-      <span style="flex:1;min-width:0;font-size:12px;color:var(--text);white-space:pre-wrap;word-break:break-all;">${escapeHtml(m.point||'')}</span>
-      <span style="font-size:10px;color:var(--text-light);flex-shrink:0;">${m.date||''}</span>
+      <span style="flex:1;min-width:0;font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(firstLine||'')}</span>
+      <span class="r-time" style="flex-shrink:0;margin:0;font-size:10px;">${m.date||''}</span>
       <span style="color:var(--text-light);font-size:11px;flex-shrink:0;">›</span>
     </div>`;
   }).join('');
 }
-/* 易错考点详情弹窗（主页待复习点开进入，可编辑/删除/返回） */
+/* 考点详情弹窗（主页待复习点开进入，可编辑/删除/返回） */
 function viewMistakeDetail(id){
   if(_detailReturnFnMistake){
     const box=document.getElementById('modalBox');
@@ -859,7 +861,7 @@ function viewMistakeDetail(id){
   if(!m) return;
   const st=getMistakeEbb(m);
   const mod=MODULES.find(x=>x.key===m.module);
-  openModal(`<div class="modal-head"><h3>易错考点详情</h3><button class="modal-close" onclick="backFromMistakeDetail()">✕</button></div>
+  openModal(`<div class="modal-head"><h3>考点详情</h3><button class="modal-close" onclick="backFromMistakeDetail()">✕</button></div>
     <div style="font-size:11px;color:var(--text-light);margin-bottom:10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
       <span style="padding:2px 8px;border-radius:10px;background:var(--warning-soft);color:var(--warning);">${mod?mod.name:'未分类'}${m.sub?' · '+m.sub:''}</span>
       <span style="padding:2px 8px;border-radius:10px;background:var(--accent-soft);color:var(--accent);">第${st.stage+1}轮/5</span>
@@ -915,7 +917,7 @@ function nextMistakeDetail(currentId){
   else{ closeModal(); renderPage(currentPageName()); toast('🎉 今日考点复习完成！'); }
 }
 function delMistakeFromDetail(id){
-  if(!confirm('删除此易错考点？')) return;
+  if(!confirm('删除此考点？')) return;
   // 先找到当前列表中下一条考点（删除前查找）
   const today=todayStr();
   const fn=_detailReturnFnMistake;
@@ -4283,7 +4285,7 @@ function renderSettings(){
         <input type="file" id="importFile" accept=".json" style="display:none" onchange="importData(this)">
       </div>
       <div class="set-item">
-        <div><div class="s-name">📊 导入刷题记录Excel</div><div class="s-desc">行测刷题记录表：每行→学习记录，问题+改进方法自动同步到易错考点</div></div>
+        <div><div class="s-name">📊 导入刷题记录Excel</div><div class="s-desc">行测刷题记录表：每行→学习记录，问题+改进方法自动同步到考点</div></div>
         <label class="btn btn-sm btn-outline" for="importStudyFile" style="cursor:pointer;display:inline-flex;">导入</label>
         <input type="file" id="importStudyFile" accept=".xlsx,.xls" style="display:none" onchange="importStudyExcel(this)">
       </div>
@@ -4370,7 +4372,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.05 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.06 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
@@ -4383,7 +4385,7 @@ function mistakeModal(id){
   _mistakePhotos = m&&m.photos?[...m.photos]:[];
   const mkMod = m ? (MODULES.find(x=>x.key===m.module)||MODULES.find(x=>x.name===m.module)||null) : null;
   const modOptions=MODULES.map(x=>`<option value="${x.key}" ${mkMod&&mkMod.key===x.key?'selected':''}>${x.icon} ${x.name}</option>`).join('');
-  openModal(`<div class="modal-head"><h3>${id?'编辑':'添加'}易错考点</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
+  openModal(`<div class="modal-head"><h3>${id?'编辑':'添加'}考点</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div class="form-row">
       <div class="form-group" style="flex:1;"><label>所属模块</label><select id="mk_module" onchange="updateMkSubSelect()">${modOptions}</select></div>
       <div class="form-group" style="flex:1;"><label>子模块</label><select id="mk_sub"></select></div>
@@ -4455,7 +4457,7 @@ async function saveMistakeAsync(id, module, sub, point, note){
   toast('已保存');
 }
 function delMistake(id){
-  if(!confirm('删除此易错考点？')) return;
+  if(!confirm('删除此考点？')) return;
   markDeleted('mistakes', id);
   DB.mistakes=DB.mistakes.filter(x=>x.id!==id);
   if(DB.mistakeEbb) delete DB.mistakeEbb[id];
@@ -4516,7 +4518,7 @@ function importMistakesFromErrors(){
   saveDB();
   const fn=_detailReturnFnMistake;
   if(fn){ closeModal(); setTimeout(()=>window[fn](),50); }
-  toast('已导入'+added+'条易错考点'+(updated?'，补充复习提醒'+updated+'条':''));
+  toast('已导入'+added+'条考点'+(updated?'，补充复习提醒'+updated+'条':''));
 }
 /* 去重易错考点：同模块+同知识点首行视为重复，保留复习轮次（stage）更大的那条 */
 function dedupMistakes(){
@@ -4685,10 +4687,10 @@ function renderPush(){
    一级=【子标题】块（默认展开第一个，其余折叠）
    二级=分组标题（大作文/申论小题等），组内的【X】块再折叠一层
    三级=时政卡片内每条"· 标题"（可点击展开详情）
-   易错考点/言语素材卡片不折叠（直接列表） */
+   考点/言语素材卡片不折叠（直接列表） */
 function renderCardFolded(bodyLines, cardTitle){
-  // 易错考点/言语素材：直接列表，不折叠
-  if(cardTitle && (cardTitle.includes('易错考点') || cardTitle.includes('言语素材'))){
+  // 考点/言语素材：直接列表，不折叠
+  if(cardTitle && (cardTitle.includes('考点') || cardTitle.includes('言语素材'))){
     return bodyLines.filter(l=>l.trim()).map(l=>`<div style="padding:3px 0;font-size:12px;color:var(--text);line-height:1.7;">${linkify(l)}</div>`).join('');
   }
   // 两级结构解析：分组标题（大作文/申论小题/人民时评等）→ 【X】块 → 行
@@ -5267,7 +5269,7 @@ async function generateMorningPush(){
     const ebbErrCount=DB.errors.filter(e=>{const st=getErrorEbb(e);return !st.done&&st.next<=today;}).length;
     const ebbMkCount=(DB.mistakes||[]).filter(m=>{const st=getMistakeEbb(m);return !st.done&&st.next<=today;}).length;
     if(ebbErrCount||ebbMkCount){
-      content+='· 今日待复习：错题 '+ebbErrCount+' 条、易错考点 '+ebbMkCount+' 条（主页「今日待复习」打卡复习）\n';
+      content+='· 今日待复习：错题 '+ebbErrCount+' 条、考点 '+ebbMkCount+' 条（主页「今日待复习」打卡复习）\n';
     }
     const moduleCount={};
     DB.errors.forEach(e=>{ moduleCount[e.module]=(moduleCount[e.module]||0)+1; });
