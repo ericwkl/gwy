@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.07</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.08</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -813,7 +813,7 @@ function mistakeListModal(){
     <div style="font-size:11px;color:var(--text-light);margin-bottom:6px;">点标签筛选模块 · 点考点查看详情</div>
     <div class="tag-list">${tags}</div>
     <div id="mkFullList">${renderFullMistakeList()}</div>
-    <div class="modal-foot"><button class="btn btn-outline" style="flex:1" onclick="closeModal()">关闭</button></div>`);
+    <div class="modal-foot"><button class="btn btn-outline" style="flex:1" onclick="syncAllErrorsToMistakesAndToast()">🔄 补同步未同步错题</button><button class="btn btn-outline" style="flex:1" onclick="closeModal()">关闭</button></div>`);
   if(_mkListScroll>0){
     setTimeout(()=>{
       const box=document.getElementById('modalBox');
@@ -1786,6 +1786,46 @@ function syncRecordToMistakes(moduleKey, rec){
     DB.mistakes.push({id:uid(),module:mod.key,point,note,date:rec.date||todayStr(),recId:rec.id,updatedAt:Date.now()});
   }catch(e){ console.warn('syncRecordToMistakes', e); }
 }
+/* 把错题的知识点自动同步到考点本（mistakes 数组）；带 recId 关联，编辑时更新而非新建 */
+function syncErrorToMistakes(err){
+  try{
+    const modKey=err.module;
+    const point=(err.point||'').trim();
+    if(!point) return; // 知识点为空不生成考点
+    // 编辑更新：优先找由这条错题产生的考点（recId 关联）
+    const linked=DB.mistakes.find(m=>m.recId===err.id);
+    if(linked){
+      linked.module=modKey;
+      linked.point=point;
+      linked.updatedAt=Date.now();
+      return;
+    }
+    // 去重：同模块 + 知识点首行已存在则不重复
+    const exists=DB.mistakes.find(m=>m.module===modKey && (m.point||'').split('\n')[0].trim()===point);
+    if(exists) return;
+    DB.mistakes.push({id:uid(),module:modKey,sub:err.sub||'',point,note:'',date:err.date||todayStr(),recId:err.id,updatedAt:Date.now()});
+  }catch(e){ console.warn('syncErrorToMistakes',e); }
+}
+/* 一次性把历史上未同步到考点本的错题补同步进来（带 recId 关联 + 去重，已存在不重复） */
+function syncAllErrorsToMistakes(){
+  if(!DB.errors||!DB.errors.length) return 0;
+  let added=0;
+  DB.errors.forEach(e=>{
+    if(!(e.point&&e.point.trim())) return;
+    const before=(DB.mistakes||[]).length;
+    syncErrorToMistakes(e);
+    if((DB.mistakes||[]).length>before) added++;
+  });
+  dedupMistakes();
+  saveDB();
+  return added;
+}
+/* 补同步按钮用：带提示并刷新弹窗 */
+function syncAllErrorsToMistakesAndToast(){
+  const n=syncAllErrorsToMistakes();
+  toast('已补同步 '+n+' 条未同步错题到考点本');
+  mistakeListModal();
+}
 /* 日期归一化：2026.07.28 / 2026/07/28 / 20260728 → 2026-07-28 */
 function normalizeDate(s){
   s=String(s||'').trim();
@@ -2143,8 +2183,11 @@ async function saveErrorAsync(id, module, sub, date, desc, answer, point, audioT
   if(id){
     const e=DB.errors.find(x=>x.id===id);
     Object.assign(e,{module,sub,date,desc,answer,point,audio,audioText,photos,updatedAt:Date.now()});
+    syncErrorToMistakes(e);
   }else{
-    DB.errors.push({id:uid(),module,sub,date,desc,answer,point,audio,audioText,photos,updatedAt:Date.now()});
+    const ne={id:uid(),module,sub,date,desc,answer,point,audio,audioText,photos,updatedAt:Date.now()};
+    DB.errors.push(ne);
+    syncErrorToMistakes(ne);
   }
   try{
     const fn=_detailReturnFn; // 保存后 closeModal 会清空跟踪变量
@@ -4373,7 +4416,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.07 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.08 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
@@ -5434,6 +5477,12 @@ function init(){
   if(!DB._mistakeDeduped){
     dedupMistakes();
     DB._mistakeDeduped=true;
+    saveDB();
+  }
+  // 一次性把历史上未同步到考点本的错题补同步进来（已存在不重复）
+  if(!DB._errSyncedMk){
+    syncAllErrorsToMistakes();
+    DB._errSyncedMk=true;
     saveDB();
   }
   renderBottomNav();
