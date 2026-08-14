@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.08</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.10</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -3777,26 +3777,140 @@ let kbCat='常识';
 function extractYyWords(kbItems){
   const words=[]; const seen=new Set();
   kbItems.forEach(k=>{
-    const txt=(k.title||'')+'\n'+(k.content||'');
+    /* 剔除"文段积累"模块（与"高频词/易混淆词语"并列的独立模块，标题下是整段文段，不是词条）：
+       从"文段积累"标题行开始跳过，直到下一个模块标题（一、/（一）/编号词条/已知模块名）或文档结尾 */
+    const wdHead=/^(?:[一二三四五六七八九十\d]+[.、]\s*)?文段积累[：:]?\s*$/;
+    const isModuleHead=(t)=>{
+      if(/^[一二三四五六七八九十]+[、．.]/.test(t)) return true;
+      if(/^（[一二三四五六七八九十\d]+）/.test(t)) return true;
+      if(/^\d+[.、]\s*\S{2,15}$/.test(t)) return true;
+      const base=t.replace(/^[#*◆▶▷▼\s]+/,'').replace(/[*#:：]+$/,'').trim();
+      return ['高频词','易混淆词语','文段积累','近义词','反义词','成语','词语','词汇','辨析','积累'].includes(base);
+    };
+    const rawLines=(k.content||'').split(/\n/).map(s=>s.trim().replace(/^[#*◆▶▷▼\s]+/,'').replace(/[*#]+$/,''));
+    let skipping=false; const cleaned=[];
+    for(let i=0;i<rawLines.length;i++){
+      const t=rawLines[i];
+      if(wdHead.test(t)){ skipping=true; continue; }
+      if(skipping && isModuleHead(t)) skipping=false;
+      if(!skipping) cleaned.push(t);
+    }
+    const content=cleaned.filter(Boolean).join('\n');
+    const txt=(k.title||'')+'\n'+content;
+    /* 对比组（易混淆词语）：识别"1. 抵御VS克服""浸润VS渗透VS浸透"式标题（2~7个词），
+       把各组各自的释义与例句整对作为一条保留。
+       规则：标题行 = 词A VS 词B [VS 词C…]；随后"词：释义"行开始该侧，紧跟的普通行作为该词例句；
+       若释义行内还挤着其它词条（无换行），按出现位置自动拆开。 */
+    const pairRe=/^(?:[一二三四五六七八九十\d]+[.、]\s*)?([^【】\n：、，。．.；;！!？?\s]{2,12}(?:\s*VS\s*[^【】\n：、，。．.；;！!？?\s]{2,12}){1,6})\s*[。．.]?$/i;
+    const lines=txt.split(/\n/).map(s=>s.trim().replace(/^[#*◆▶▷▼\s]+/,'').replace(/[*#]+$/,'')).filter(Boolean);
+    for(let i=0;i<lines.length;i++){
+      const lm=lines[i].match(pairRe);
+      if(!lm) continue;
+      const pairWords=lm[1].split(/\s*VS\s*/i);
+      if(pairWords.length<2 || new Set(pairWords).size!==pairWords.length) continue;
+      const sides={}; pairWords.forEach(w=>{ sides[w]={def:'',examples:[]}; });
+      let cur=null, added=false;
+      for(let j=i+1;j<lines.length;j++){
+        const ln=lines[j];
+        if(lines[j].match(pairRe)) break; // 下一个对比组
+        const dm=ln.match(/^([^【】\n：、，。．.；;！!？?\s]{2,12})\s*[：:]\s*(.+)$/);
+        const dm2=ln.match(/^【([^】\n]{2,15})】\s*(.+)$/); // 个别组用【词】释义格式
+        if(dm||dm2){
+          const w=dm?dm[1]:dm2[1];
+          if(/积累$/.test(w)) continue; // "文段积累："等元标签行跳过
+          if(!sides[w]) break; // 不属于本组的"词：释义"行 → 本组结束
+          if(dm){
+            // 释义行内可能还挤着其它词条（无换行）：按出现位置拆开
+            let rest=dm[2], parts=[], cw=w;
+            while(true){
+              let best=null,bestPos=-1;
+              for(const pw of pairWords){
+                if(pw===cw) continue;
+                const p=rest.indexOf(pw+'：');
+                const p2=p<0?rest.indexOf(pw+':'):p;
+                if(p2>=0&&(bestPos<0||p2<bestPos)){ best=pw; bestPos=p2; }
+              }
+              if(best===null||bestPos<0) break;
+              const pre=rest.slice(0,bestPos).trim();
+              if(pre) parts.push({word:cw,def:pre});
+              cw=best;
+              rest=rest.slice(bestPos+best.length+1);
+            }
+            if(rest.trim()) parts.push({word:cw,def:rest.trim()});
+            parts.forEach(p=>{ if(!sides[p.word].def) sides[p.word].def=p.def; });
+            cur=parts.length?parts[parts.length-1].word:w;
+          }else{
+            sides[w].def=dm2[2].trim();
+            cur=w;
+          }
+          continue;
+        }
+        // 例句：追加到当前侧（≥6字，排除"用途："说明行）
+        if(cur && ln.length>=6 && !/^用途[：:]/.test(ln)) sides[cur].examples.push(ln);
+      }
+      if(pairWords.every(w=>sides[w].def)){
+        const pairKey=pairWords.join('VS');
+        if(!seen.has(pairKey)){
+          seen.add(pairKey); pairWords.forEach(w=>seen.add(w));
+          let s='【'+pairKey+'】';
+          pairWords.forEach(w=>{
+            s+='\n'+w+'：'+sides[w].def;
+            if(sides[w].examples.length) s+='\n例：'+sides[w].examples.slice(0,2).join('\n例：');
+          });
+          words.push(s);
+          added=true;
+        }
+      }
+      if(added){ // 本组已消费的行跳过，避免再被单条规则重复抽取
+        let j=i+1;
+        while(j<lines.length && !lines[j].match(pairRe)) j++;
+        i=j-1;
+      }
+    }
     const re1=/(?:^|\n)【([^】\n]{2,15})】\s*([^\n]{2,150})/g;
     let m;
     while((m=re1.exec(txt))){
       const word=m[1], body=m[2].trim();
-      if(/^(高频|易混|生词|词语|词汇|近义|反义|辨析)$/.test(word)||/^(积累|素材|笔记|总结)$/.test(word)) continue;
+      if(/积累$/.test(word)||/^(高频|易混|生词|词语|词汇|近义|反义|辨析|素材|笔记|总结)$/.test(word)) continue;
       if(!seen.has(word)){ seen.add(word); words.push('【'+word+'】'+body.slice(0,120)); }
     }
     const re2=/(?:^|\n)[【]?([^】\n：、，]{2,15})[】]?[:：]\s*([^\n]{2,150})/g;
     while((m=re2.exec(txt))){
       const word=m[1], body=m[2].trim();
-      if(/^(高频|易混|生词|词语|词汇|近义|反义|辨析)$/.test(word)) continue;
+      if(/积累$/.test(word)||/^(高频|易混|生词|词语|词汇|近义|反义|辨析)$/.test(word)) continue;
       if(!seen.has(word)){ seen.add(word); words.push('【'+word+'】'+body.slice(0,120)); }
     }
-    const lines=txt.split(/\n+/).map(s=>s.trim()).filter(Boolean);
+    /* 独立行词条（高频词等）：词单独一行，后续行为释义行与（来源）例句行。
+       词名取独立行本身（修复旧兜底把下一行短词当词名的错位，如"引擎"被提取成"发动机"）；
+       释义行合并展示（pre-wrap 换行），例句行带"例："前缀。 */
     for(let i=0;i<lines.length-1;i++){
       const cur=lines[i].replace(/^[【】\s]+|[【】\s]+$/g,'');
-      const next=lines[i+1];
-      if(cur.length>=2&&cur.length<=8&&next.length>=10&&!/[。！？.：；]$/.test(cur)&&!/^[\d（(]/.test(next)&&!/^【/.test(cur)&&cur!==(k.title||'').trim()&&!seen.has(cur)){
-        seen.add(cur); words.push('【'+cur+'】'+next.slice(0,100));
+      if(cur.length<2||cur.length>8) continue;
+      if(/[。！？.：；，、]$/.test(cur)) continue;                 // 词不以标点结尾
+      if(/^[（(【\d#*]/.test(cur)) continue;                      // 不以（/(/【/数字/#* 开头
+      if(/积累$/.test(cur)||/^(高频词|易混淆词语|生词|正确搭配|文段积累)$/.test(cur)) continue;
+      if(cur===(k.title||'').trim()||seen.has(cur)) continue;
+      if(lines[i].match(pairRe)) continue;                        // 对比组标题（已另行处理）
+      let defs=[], exs=[], sawEx=false;
+      for(let j=i+1;j<lines.length;j++){
+        const ln=lines[j];
+        if(lines[j].match(pairRe)) break;                         // 对比组标题
+        if(/^[^【】\n：、，。．.；;！!？?\s]{2,12}\s*[：:]/.test(ln)||/^【[^】]+】/.test(ln)) break; // 下一个"词："/【词】条目
+        if(/^[一二三四五六七八九十]+[、．.]/.test(ln)||/^（[一二三四五六七八九十\d]+）/.test(ln)) break; // 模块/小节标题
+        if(/^[（(][^）)]{2,20}[）)]/.test(ln)){ exs.push(ln); sawEx=true; continue; } // （来源）例句
+        if(ln.length>=6 && !/^——/.test(ln) && !/^用途[：:]/.test(ln)){ defs.push(ln); continue; } // 释义行
+        if(ln.length>=6) continue;
+        // 短行（<6字）：例句之后出现→下一个词条；例句之前→释义（如"引擎"下的"发动机"）
+        if(sawEx) break;
+        defs.push(ln);
+      }
+      if(defs.length){
+        seen.add(cur);
+        let s='【'+cur+'】';
+        s+='\n'+defs.join('\n');
+        if(exs.length) s+='\n例：'+exs.slice(0,2).join('\n例：');
+        words.push(s);
+        i+=defs.length+exs.length; // 跳过已消费的行
       }
     }
   });
@@ -3937,7 +4051,19 @@ async function renderAccu(){
       if(picked.length){
         cards+=`<div class="card">
           <div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span class="section-tag">${words.length}条</span></div>
-          ${picked.map(w=>`<div style="padding:4px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);">${linkify(w)}</div>`).join('')}
+          ${picked.map(w=>{
+            if(w.indexOf('\n')>-1){
+              // 多行条目：对比组标题高亮、单条标题加粗、释义正常色、例句淡化
+              const segs=w.split('\n').map(s=>{
+                if(/^【[^】]*VS[^】]*】$/.test(s)) return `<span style="font-weight:700;color:var(--primary);">${escapeHtml(s)}</span>`;
+                if(/^例：/.test(s)) return `<span style="color:var(--text-light);">${escapeHtml(s)}</span>`;
+                if(/^【.+】$/.test(s)) return `<span style="font-weight:600;">${escapeHtml(s)}</span>`;
+                return escapeHtml(s);
+              }).join('\n');
+              return `<div style="padding:6px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);white-space:pre-wrap;word-break:break-word;">${segs}</div>`;
+            }
+            return `<div style="padding:4px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);">${linkify(w)}</div>`;
+          }).join('')}
         </div>`;
       }
     } else if(cat.display==='申论素材'){
@@ -4416,7 +4542,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.08 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.10 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
