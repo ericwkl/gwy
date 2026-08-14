@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.10</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.12</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -4094,6 +4094,26 @@ async function renderAccu(){
           cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>申论小题</span><span class="section-tag">${xtCats.length}类</span></div>${xtHtml}</div>`;
         }
       }
+      // 人民时评卡片：与申论素材、申论小题平级，放在小题后面。
+      // 两个分区：人民日报·人民时评（plsp）+ 南方日报·评论员（nfpl），分开展示
+      const plsp=(liveNews&&liveNews.plsp)||[];
+      const nfpl=(liveNews&&liveNews.nfpl)||[];
+      if(plsp.length||nfpl.length){
+        let secHtml='';
+        const newsItem=n=>{
+          let line='· '+(n.date?'['+n.date.slice(5)+'] ':'')+n.title;
+          if(n.url) line+='\n  '+n.url;
+          if(n.digest) line+='\n  '+n.digest;
+          return `<div style="padding:3px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);">${linkify(line)}</div>`;
+        };
+        if(plsp.length){
+          secHtml+=`<div style="font-size:12px;font-weight:600;color:var(--primary);padding:4px 0 2px;">人民日报 · 人民时评</div>`+plsp.slice(0,6).map(newsItem).join('');
+        }
+        if(nfpl.length){
+          secHtml+=`<div style="font-size:12px;font-weight:600;color:var(--primary);padding:6px 0 2px;">南方日报 · 评论员</div>`+nfpl.slice(0,6).map(n=>newsItem({...n,title:n.title.replace(/^南方日报评论员[：:]\s*/,'')})).join('');
+        }
+        cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">📰</span>人民时评</span><span class="section-tag">${(liveNews&&fmtNewsTime(liveNews.t))||'实时'}</span></div>${secHtml}</div>`;
+      }
     } else {
       // 常识/政治理论/面试：逐行解析，编号行(1. 2. 等)开始新知识点，
       // 后续非编号行（子项、缩进行）追加到当前知识点
@@ -4542,7 +4562,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.10 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.12 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
@@ -5391,13 +5411,13 @@ async function fetchLiveNews(force){
   try{
     const c=JSON.parse(localStorage.getItem(NEWS_CACHE_KEY)||'null');
     if(c&&c.t&&now-c.t<30*60*1000&&!force&&(c.gov.length||c.gd.length)){
-      // 旧版本缓存可能缺 llk/plsp 等字段，兜底为空数组（v2.1.81 修复：补 plsp）
-      ['gov','gd','qs','rm','llk','plsp'].forEach(k=>{ if(!Array.isArray(c[k])) c[k]=[]; });
+      // 旧版本缓存可能缺 llk/plsp/nfpl 等字段，兜底为空数组（v2.1.81 修复：补 plsp）
+      ['gov','gd','qs','rm','llk','plsp','nfpl'].forEach(k=>{ if(!Array.isArray(c[k])) c[k]=[]; });
       return c;
     }
   }catch(e){}
-  const [govR,gdR,qsR,rmR,llkR,plspR]=await Promise.allSettled([
-    fetchProxyNews('gov'),fetchProxyNews('gd'),fetchProxyNews('qs'),fetchProxyNews('rm'),fetchProxyNews('rmllk'),fetchProxyNews('plsp')
+  const [govR,gdR,qsR,rmR,llkR,plspR,nfplR]=await Promise.allSettled([
+    fetchProxyNews('gov'),fetchProxyNews('gd'),fetchProxyNews('qs'),fetchProxyNews('rm'),fetchProxyNews('rmllk'),fetchProxyNews('plsp'),fetchProxyNews('nfpl')
   ]);
   const result={
     t:now,
@@ -5407,6 +5427,7 @@ async function fetchLiveNews(force){
     rm:(rmR.status==='fulfilled'?rmR.value:[]).filter(x=>x.title),
     llk:(llkR.status==='fulfilled'?llkR.value:[]).filter(x=>x.title),
     plsp:(plspR.status==='fulfilled'?plspR.value:[]).filter(x=>x.title),
+    nfpl:(nfplR.status==='fulfilled'?nfplR.value:[]).filter(x=>x.title),
     via:'代理'
   };
   // gov 双保险：代理失败则直连 gov.cn（file:// 下放行 CORS）
