@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.14</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.17</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -634,8 +634,8 @@ function renderHome(){
    未点「已掌握」（或点「待复习」）则明天继续显示，
    完成全部 5 轮复习后彻底记住，不再出现在待复习
    ============================================================ */
-const EBB_DAYS=[1,2,4,7,15]; // 第1天、第2天、第4天、第7天、第15天（录入日算第1天）
-function ebbNextDate(base, stage){ // stage 1..4：已完成stage轮，下一轮复习日 = base + (EBB_DAYS[stage]-1)
+const EBB_DAYS=[0,1,2,4,7,15]; // 标准艾宾浩斯间隔：录入当天=第1轮；完成第N轮后隔 EBB_DAYS[N] 天（1/2/4/7/15），共6轮（stage 0→6）
+function ebbNextDate(base, stage){ // （未使用）旧绝对排期算法，间隔统一改由"完成日+EBB_DAYS[stage]"计算
   const d=new Date(base+'T00:00:00');
   d.setDate(d.getDate() + (EBB_DAYS[stage]-1));
   return localDateStr(d);
@@ -705,11 +705,11 @@ function ebbErrorAction(id, action){
   if(action==='master'){
     delete st.pending;
     st.stage++;
-    if(st.stage>=5){ st.done=true; st.next=''; toast('🎉 5轮复习完成，彻底记住！'); }
+    if(st.stage>=6){ st.done=true; st.next=''; toast('🎉 6轮复习完成，彻底记住！'); }
     else{
-      // 下一轮 = 今天（完成日） + EBB_DAYS[st.stage-1] 天（避免同日重复进入待复习）
-      // 例如今天完成第2轮（stage=2），下次 = 今天+4=base+1+2+4=base+7
-      const d=new Date(); d.setDate(d.getDate()+EBB_DAYS[st.stage-1]);
+      // v2.2.17：完成第N轮后隔 EBB_DAYS[N] 天（2/4/7/15）。原错位用 EBB_DAYS[N-1]（1/2/4/7），
+      // 导致 15号完成第二轮 → 17号（隔2天）；正确应为 19号（隔4天）
+      const d=new Date(); d.setDate(d.getDate()+EBB_DAYS[st.stage]);
       st.next=localDateStr(d);
       toast('已掌握！第'+(st.stage+1)+'轮在 '+st.next.slice(5)+' 复习');
     }
@@ -727,10 +727,10 @@ function ebbMistakeAction(id, action){
   if(action==='master'){
     delete st.pending;
     st.stage++;
-    if(st.stage>=5){ st.done=true; st.next=''; toast('🎉 5轮复习完成，彻底记住！'); }
+    if(st.stage>=6){ st.done=true; st.next=''; toast('🎉 6轮复习完成，彻底记住！'); }
     else{
-      // 下一轮 = 今天 + EBB_DAYS[st.stage-1] 天（避免同日重复进入待复习）
-      const d=new Date(); d.setDate(d.getDate()+EBB_DAYS[st.stage-1]);
+      // v2.2.17：同错题，完成第N轮后隔 EBB_DAYS[N] 天（2/4/7/15）
+      const d=new Date(); d.setDate(d.getDate()+EBB_DAYS[st.stage]);
       st.next=localDateStr(d);
       toast('已掌握！第'+(st.stage+1)+'轮在 '+st.next.slice(5)+' 复习');
     }
@@ -744,14 +744,33 @@ function ebbMistakeAction(id, action){
 }
 /* 全部待复习错题弹窗（按模块分类筛选） */
 let ebbErrFilter='';
+let ebbErrSubFilter=''; // v2.2.17 待复习错题子模块筛选
 function showAllErrorEbb(){
   _detailReturnFn='showAllErrorEbb'; // 标记：从待复习列表进入详情，返回时回到列表
   const today=todayStr();
-  const list=DB.errors.filter(e=>{const st=getErrorEbb(e); return !st.done && st.next<=today;});
+  let list=DB.errors.filter(e=>{const st=getErrorEbb(e); return !st.done && st.next<=today;});
+  if(ebbErrFilter) list=list.filter(e=>e.module===ebbErrFilter);
+  if(ebbErrSubFilter) list=list.filter(e=>e.sub===ebbErrSubFilter);
+  // 默认按模块→子模块顺序排列（不再按录入顺序）
+  const modOrder={}; MODULES.forEach((m,i)=>{ modOrder[m.key]=i; });
+  list=[...list].sort((a,b)=>{
+    const ma=modOrder[a.module]!==undefined?modOrder[a.module]:99;
+    const mb=modOrder[b.module]!==undefined?modOrder[b.module]:99;
+    if(ma!==mb) return ma-mb;
+    const subsA=MODULES.find(m=>m.key===a.module)||{subs:[]};
+    const subsB=MODULES.find(m=>m.key===b.module)||{subs:[]};
+    const sa=(subsA.subs.indexOf(a.sub||'')<0?99:subsA.subs.indexOf(a.sub||''));
+    const sb=(subsB.subs.indexOf(b.sub||'')<0?99:subsB.subs.indexOf(b.sub||''));
+    if(sa!==sb) return sa-sb;
+    return (b.date||'').localeCompare(a.date||'');
+  });
   const tags=[['','全部']].concat(MODULES.map(m=>[m.key,m.name]))
     .map(([k,n])=>`<span class="tag ${ebbErrFilter===k?'on':''}" data-k="${k}" onclick="setEbbErrFilter('${k}')">${k?MODULES.find(m=>m.key===k).icon+' ':''}${n}</span>`).join('');
-  const fl = ebbErrFilter ? list.filter(e=>e.module===ebbErrFilter) : list;
-  const rows=fl.map(e=>{
+  const curMod=ebbErrFilter?MODULES.find(m=>m.key===ebbErrFilter):null;
+  const subRow=(curMod&&curMod.subs&&curMod.subs.length)?`<div class="tag-list" style="margin-top:4px;">`+
+    [['','全部子模块']].concat(curMod.subs.map(s=>[s,s]))
+      .map(([k,n])=>`<span class="tag ${ebbErrSubFilter===k?'on':''}" data-sub="${k}" onclick="setEbbErrSubFilter('${k}')">${n}</span>`).join('')+`</div>`:'';
+  const rows=list.map(e=>{
     const st=getErrorEbb(e); const mod=MODULES.find(m=>m.key===e.module);
     const badge=mod?mod.name+(e.sub?'·'+e.sub:''):'未分类';
     return `<div style="display:flex;align-items:center;gap:6px;padding:8px 0;border-bottom:1px solid var(--border);">
@@ -763,25 +782,49 @@ function showAllErrorEbb(){
     </div>`;
   }).join('');
   openModal(`<div class="modal-head"><h3>🎯 待复习错题（${list.length}条）</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
-    <div style="font-size:11px;color:var(--text-light);margin-bottom:6px;">点标签筛选模块</div>
-    <div class="tag-list">${tags}</div>
+    <div style="font-size:11px;color:var(--text-light);margin-bottom:6px;">点标签筛选模块/子模块 · 默认按模块→子模块排序</div>
+    <div class="tag-list">${tags}</div>${subRow}
     <div style="max-height:55vh;overflow-y:auto;">${rows||'<div class="empty-state">无待复习错题</div>'}</div>
     <div class="modal-foot"><button class="btn btn-outline" style="flex:1" onclick="closeModal()">关闭</button></div>`);
 }
 function setEbbErrFilter(k){
   ebbErrFilter=k;
+  ebbErrSubFilter=''; // 切换模块时重置子模块筛选
   closeModal(); showAllErrorEbb();
 }
-/* 全部待复习易错考点弹窗（按模块分类筛选） */
+function setEbbErrSubFilter(k){
+  ebbErrSubFilter=k;
+  closeModal(); showAllErrorEbb();
+}
+/* 全部待复习易错考点弹窗（按模块/子模块分类筛选） */
 let ebbMkFilter='';
+let ebbMkSubFilter=''; // v2.2.17 待复习考点子模块筛选
 function showAllMistakeEbb(){
   _detailReturnFnMistake='showAllMistakeEbb'; // 标记：从待复习列表进入详情，返回时回到列表
   const today=todayStr();
-  const list=(DB.mistakes||[]).filter(m=>{const st=getMistakeEbb(m); return !st.done && st.next<=today;});
+  let list=(DB.mistakes||[]).filter(m=>{const st=getMistakeEbb(m); return !st.done && st.next<=today;});
+  if(ebbMkFilter) list=list.filter(m=>m.module===ebbMkFilter);
+  if(ebbMkSubFilter) list=list.filter(m=>m.sub===ebbMkSubFilter);
+  // 默认按模块→子模块顺序排列（不再按录入顺序）
+  const modOrder={}; MODULES.forEach((m,i)=>{ modOrder[m.key]=i; });
+  list=[...list].sort((a,b)=>{
+    const ma=modOrder[a.module]!==undefined?modOrder[a.module]:99;
+    const mb=modOrder[b.module]!==undefined?modOrder[b.module]:99;
+    if(ma!==mb) return ma-mb;
+    const subsA=MODULES.find(m=>m.key===a.module)||{subs:[]};
+    const subsB=MODULES.find(m=>m.key===b.module)||{subs:[]};
+    const sa=(subsA.subs.indexOf(a.sub||'')<0?99:subsA.subs.indexOf(a.sub||''));
+    const sb=(subsB.subs.indexOf(b.sub||'')<0?99:subsB.subs.indexOf(b.sub||''));
+    if(sa!==sb) return sa-sb;
+    return (b.date||'').localeCompare(a.date||'');
+  });
   const tags=[['','全部']].concat(MODULES.map(m=>[m.key,m.name]))
     .map(([k,n])=>`<span class="tag ${ebbMkFilter===k?'on':''}" data-k="${k}" onclick="setEbbMkFilter('${k}')">${k?MODULES.find(m=>m.key===k).icon+' ':''}${n}</span>`).join('');
-  const fl = ebbMkFilter ? list.filter(m=>m.module===ebbMkFilter) : list;
-  const rows=fl.map(m=>{
+  const curMod=ebbMkFilter?MODULES.find(m=>m.key===ebbMkFilter):null;
+  const subRow=(curMod&&curMod.subs&&curMod.subs.length)?`<div class="tag-list" style="margin-top:4px;">`+
+    [['','全部子模块']].concat(curMod.subs.map(s=>[s,s]))
+      .map(([k,n])=>`<span class="tag ${ebbMkSubFilter===k?'on':''}" data-sub="${k}" onclick="setEbbMkSubFilter('${k}')">${n}</span>`).join('')+`</div>`:'';
+  const rows=list.map(m=>{
     const st=getMistakeEbb(m); const mod=MODULES.find(x=>x.key===m.module);
     return `<div style="display:flex;align-items:center;gap:6px;padding:8px 0;border-bottom:1px solid var(--border);">
       <span style="flex-shrink:0;font-size:10px;padding:1px 6px;border-radius:6px;background:var(--warning-soft);color:var(--warning);white-space:nowrap;">${mod?mod.name:'未分类'}${m.sub?'·'+m.sub:''}</span>
@@ -792,17 +835,23 @@ function showAllMistakeEbb(){
     </div>`;
   }).join('');
   openModal(`<div class="modal-head"><h3>🔁 待复习考点（${list.length}条）</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
-    <div style="font-size:11px;color:var(--text-light);margin-bottom:6px;">点标签筛选模块</div>
-    <div class="tag-list">${tags}</div>
+    <div style="font-size:11px;color:var(--text-light);margin-bottom:6px;">点标签筛选模块/子模块 · 默认按模块→子模块排序</div>
+    <div class="tag-list">${tags}</div>${subRow}
     <div style="max-height:55vh;overflow-y:auto;">${rows||'<div class="empty-state">无待复习考点</div>'}</div>
     <div class="modal-foot"><button class="btn btn-outline" style="flex:1" onclick="closeModal()">关闭</button></div>`);
 }
 function setEbbMkFilter(k){
   ebbMkFilter=k;
+  ebbMkSubFilter=''; // 切换模块时重置子模块筛选
+  closeModal(); showAllMistakeEbb();
+}
+function setEbbMkSubFilter(k){
+  ebbMkSubFilter=k;
   closeModal(); showAllMistakeEbb();
 }
 /* 考点本弹窗（全部考点，类似错题本，从主页「管理」进入） */
 let mkListFilter='';
+let mkListSubFilter=''; // v2.2.17 考点本子模块筛选（如 判断推理→图形推理）
 let _mkListScroll=0; // 考点本滚动位置记忆（详情返回时恢复）
 let _detailReturnFnMistake=null;
 function mistakeListModal(){
@@ -810,8 +859,8 @@ function mistakeListModal(){
   const tags=[['','全部']].concat(MODULES.map(m=>[m.key,m.name]))
     .map(([k,n])=>`<span class="tag ${mkListFilter===k?'on':''}" data-k="${k}" onclick="setMkListFilter('${k}')">${k?MODULES.find(m=>m.key===k).icon+' ':''}${n}</span>`).join('');
   openModal(`<div class="modal-head"><h3>📒 考点本（${(DB.mistakes||[]).length}条）</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
-    <div style="font-size:11px;color:var(--text-light);margin-bottom:6px;">点标签筛选模块 · 点考点查看详情</div>
-    <div class="tag-list">${tags}</div>
+    <div style="font-size:11px;color:var(--text-light);margin-bottom:6px;">点标签筛选模块/子模块 · 默认按模块→子模块排序 · 点考点查看详情</div>
+    <div class="tag-list" id="mkTagList">${tags}</div>${mkSubTagRow()}
     <div id="mkFullList">${renderFullMistakeList()}</div>
     <div class="modal-foot"><button class="btn btn-outline" style="flex:1" onclick="syncAllErrorsToMistakesAndToast()">🔄 补同步未同步错题</button><button class="btn btn-outline" style="flex:1" onclick="closeModal()">关闭</button></div>`);
   if(_mkListScroll>0){
@@ -821,35 +870,109 @@ function mistakeListModal(){
     },60);
   }
 }
+/* 考点本子模块标签行：选中模块有子模块时显示（如 判断推理 → 图形推理/定义判断…） */
+function mkSubTagRow(){
+  const curMod=mkListFilter?MODULES.find(m=>m.key===mkListFilter):null;
+  if(!curMod||!curMod.subs||!curMod.subs.length) return '';
+  return `<div class="tag-list" id="mkSubTagRow" style="margin-top:4px;">`+
+    [['','全部子模块']].concat(curMod.subs.map(s=>[s,s]))
+      .map(([k,n])=>`<span class="tag ${mkListSubFilter===k?'on':''}" data-sub="${k}" onclick="setMkListSubFilter('${k}')">${n}</span>`).join('')+
+    `</div>`;
+}
 function setMkListFilter(k){
   mkListFilter=k;
+  mkListSubFilter=''; // 切换模块时重置子模块筛选
   const box=document.getElementById('mkFullList');
   if(box) box.innerHTML=renderFullMistakeList();
   document.querySelectorAll('#modalBox .tag').forEach(t=>{
     t.classList.toggle('on', t.getAttribute('data-k')===k);
   });
+  const subRow=document.getElementById('mkSubTagRow');
+  if(subRow) subRow.outerHTML=mkSubTagRow();
+  else{
+    const tagList=document.getElementById('mkTagList');
+    if(tagList && mkListFilter && MODULES.find(m=>m.key===mkListFilter)?.subs?.length){
+      tagList.insertAdjacentHTML('afterend', mkSubTagRow());
+    }
+  }
+}
+function setMkListSubFilter(k){
+  mkListSubFilter=k;
+  const box=document.getElementById('mkFullList');
+  if(box) box.innerHTML=renderFullMistakeList();
+  document.querySelectorAll('#mkSubTagRow .tag').forEach(t=>{
+    t.classList.toggle('on', t.getAttribute('data-sub')===k);
+  });
 }
 function renderFullMistakeList(){
-  let list=[...(DB.mistakes||[])].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  let list=[...(DB.mistakes||[])];
   if(!list.length) return '<div class="empty-state"><div class="emoji">📒</div><div class="txt">暂无考点</div></div>';
-  if(mkListFilter){
-    list=list.filter(m=>m.module===mkListFilter);
-    if(!list.length) return '<div class="empty-state"><div class="emoji">📒</div><div class="txt">该分类暂无考点</div></div>';
-  }
-  return list.map(m=>{
-    const mod=MODULES.find(x=>x.key===m.module)||MODULES.find(x=>x.name===m.module);
-    const st=getMistakeEbb(m);
-    const round=st.done?'✅':'第'+(st.stage+1)+'轮';
-    const badge=mod?mod.icon+' '+mod.name+(m.sub?'·'+m.sub:''):'未分类';
-    const firstLine=(m.point||'').split('\n')[0].trim();
-    return `<div class="error-item" style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:9px 10px;" onclick="viewMistakeDetail('${m.id}')">
-      <span class="r-tag" style="flex-shrink:0;margin:0;font-size:10px;white-space:nowrap;">${badge}</span>
-      <span style="flex-shrink:0;font-size:10px;color:var(--accent);background:var(--accent-soft);padding:0 6px;border-radius:6px;white-space:nowrap;">${round}</span>
-      <span style="flex:1;min-width:0;font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(firstLine||'')}</span>
-      <span class="r-time" style="flex-shrink:0;margin:0;font-size:10px;">${m.date||''}</span>
-      <span style="color:var(--text-light);font-size:11px;flex-shrink:0;">›</span>
-    </div>`;
+  if(mkListFilter) list=list.filter(m=>m.module===mkListFilter);
+  if(mkListSubFilter) list=list.filter(m=>m.sub===mkListSubFilter);
+  if(!list.length) return '<div class="empty-state"><div class="emoji">📒</div><div class="txt">该分类暂无考点</div></div>';
+  // 默认按模块顺序 → 子模块顺序排列（不再按时间平铺），组内时间倒序
+  const modOrder={}; MODULES.forEach((m,i)=>{ modOrder[m.key]=i; });
+  list.sort((a,b)=>{
+    const ma=modOrder[a.module]!==undefined?modOrder[a.module]:99;
+    const mb=modOrder[b.module]!==undefined?modOrder[b.module]:99;
+    if(ma!==mb) return ma-mb;
+    const subsA=MODULES.find(m=>m.key===a.module)||{subs:[]};
+    const subsB=MODULES.find(m=>m.key===b.module)||{subs:[]};
+    const sa=(subsA.subs.indexOf(a.sub||'')<0?99:subsA.subs.indexOf(a.sub||''));
+    const sb=(subsB.subs.indexOf(b.sub||'')<0?99:subsB.subs.indexOf(b.sub||''));
+    if(sa!==sb) return sa-sb;
+    return (b.date||'').localeCompare(a.date||'');
+  });
+  // 模块 → 子模块 二级分组（与错题本一致）
+  const byMod={};
+  list.forEach(m=>{ byMod[m.module]=(byMod[m.module]||[]).concat(m); });
+  const order=MODULES.filter(m=>byMod[m.key]).map(m=>m.key);
+  Object.keys(byMod).forEach(k=>{ if(!order.includes(k)) order.push(k); });
+  return order.map(mk=>{
+    const items=byMod[mk];
+    const mod=MODULES.find(m=>m.key===mk);
+    const name=mod?mod.icon+' '+mod.name:'未分类';
+    return `<div style="display:flex;align-items:center;gap:6px;margin:12px 0 6px;">
+      <span style="font-size:13px;font-weight:700;color:var(--primary);">${name}</span>
+      <span style="font-size:11px;background:var(--primary-soft);color:var(--primary);border-radius:8px;padding:1px 8px;">${items.length}条</span>
+    </div>`+renderMkSubGrouped(items);
   }).join('');
+}
+/* 考点按子模块分组（子模块顺序按 MODULES.subs，无子模块排最后），组内时间倒序 */
+function renderMkSubGrouped(items){
+  const bySub={};
+  items.forEach(m=>{ const s=m.sub||''; bySub[s]=(bySub[s]||[]).concat(m); });
+  const sampleMod=MODULES.find(m=>m.key===items[0].module);
+  const subsOrder=(sampleMod&&sampleMod.subs)||[];
+  const subKeys=Object.keys(bySub).sort((a,b)=>{
+    if(!a) return 1;
+    if(!b) return -1;
+    const ia=subsOrder.indexOf(a), ib=subsOrder.indexOf(b);
+    return (ia<0?99:ia)-(ib<0?99:ib);
+  });
+  return subKeys.map(s=>{
+    const sItems=bySub[s];
+    const header=s?`<div style="display:flex;align-items:center;gap:6px;margin:8px 0 4px 4px;">
+      <span style="font-size:12px;font-weight:600;color:var(--accent);">▸ ${s}</span>
+      <span style="font-size:10px;background:var(--accent-soft);color:var(--accent);border-radius:8px;padding:0 6px;">${sItems.length}条</span>
+    </div>`:'';
+    return header+sItems.map(m=>mkItemHtml(m)).join('');
+  }).join('');
+}
+/* 考点列表行 */
+function mkItemHtml(m){
+  const mod=MODULES.find(x=>x.key===m.module)||MODULES.find(x=>x.name===m.module);
+  const st=getMistakeEbb(m);
+  const round=st.done?'✅':'第'+(st.stage+1)+'轮';
+  const badge=mod?mod.icon+' '+mod.name+(m.sub?'·'+m.sub:''):'未分类';
+  const firstLine=(m.point||'').split('\n')[0].trim();
+  return `<div class="error-item" style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:9px 10px;" onclick="viewMistakeDetail('${m.id}')">
+    <span class="r-tag" style="flex-shrink:0;margin:0;font-size:10px;white-space:nowrap;">${badge}</span>
+    <span style="flex-shrink:0;font-size:10px;color:var(--accent);background:var(--accent-soft);padding:0 6px;border-radius:6px;white-space:nowrap;">${round}</span>
+    <span style="flex:1;min-width:0;font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(firstLine||'')}</span>
+    <span class="r-time" style="flex-shrink:0;margin:0;font-size:10px;">${m.date||''}</span>
+    <span style="color:var(--text-light);font-size:11px;flex-shrink:0;">›</span>
+  </div>`;
 }
 /* 考点详情弹窗（主页待复习点开进入，可编辑/删除/返回） */
 function viewMistakeDetail(id){
@@ -1078,7 +1201,7 @@ function saveWeekTask(day, id){
   if(!DB.weekTasks) DB.weekTasks=[];
   if(id){
     const t=DB.weekTasks.find(x=>x.id===id);
-    if(t){ t.text=text; t.updatedAt=Date.now(); } // 编辑任务名必须更新时间戳，否则合并时不生效（v2.2.14）
+    if(t){ t.text=text; t.updatedAt=Date.now(); } // 编辑任务名必须更新时间戳，否则合并时不生效（v2.2.17）
   }else{
     DB.weekTasks.push({id:uid(),day,text,done:false,updatedAt:Date.now()});
   }
@@ -1260,15 +1383,16 @@ function renderErrorList(limit){
   }).join('');
 }
 
-/* 完整错题本弹窗（查看全部错题，可按模块筛选） */
+/* 完整错题本弹窗（查看全部错题，可按模块/子模块筛选） */
 let errFilter='';
+let errSubFilter=''; // v2.2.17 错题本子模块筛选
 function errorListModal(){
   _detailReturnFn='errorListModal'; // 标记：从错题本进入详情，返回时回到错题本
   const tags=[['','全部']].concat(MODULES.map(m=>[m.key,m.name]))
     .map(([k,n])=>`<span class="tag ${errFilter===k?'on':''}" data-k="${k}" onclick="setErrFilter('${k}')">${k?MODULES.find(m=>m.key===k).icon+' ':''}${n}</span>`).join('');
   openModal(`<div class="modal-head"><h3>📚 错题本（${DB.errors.length}条）</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
-    <div style="font-size:11px;color:var(--text-light);margin-bottom:6px;">点标签筛选模块 · 默认按模块→子模块分组显示</div>
-    <div class="tag-list">${tags}</div>
+    <div style="font-size:11px;color:var(--text-light);margin-bottom:6px;">点标签筛选模块/子模块 · 默认按模块→子模块分组显示</div>
+    <div class="tag-list" id="errTagList">${tags}</div>${errSubTagRow()}
     <div id="errFullList">${renderFullErrorList()}</div>`);
   // 从详情返回时恢复之前的滚动位置（保持打开题目前的位置）
   if(_errListScroll>0){
@@ -1278,14 +1402,40 @@ function errorListModal(){
     },60);
   }
 }
+/* 错题本子模块标签行：选中模块有子模块时显示 */
+function errSubTagRow(){
+  const curMod=errFilter?MODULES.find(m=>m.key===errFilter):null;
+  if(!curMod||!curMod.subs||!curMod.subs.length) return '';
+  return `<div class="tag-list" id="errSubTagRow" style="margin-top:4px;">`+
+    [['','全部子模块']].concat(curMod.subs.map(s=>[s,s]))
+      .map(([k,n])=>`<span class="tag ${errSubFilter===k?'on':''}" data-sub="${k}" onclick="setErrSubFilter('${k}')">${n}</span>`).join('')+
+    `</div>`;
+}
 let _errListScroll=0; // 错题本滚动位置记忆（详情返回时恢复）
 function setErrFilter(k){
   errFilter=k;
+  errSubFilter=''; // 切换模块时重置子模块筛选
   const box=document.getElementById('errFullList');
   if(box) box.innerHTML=renderFullErrorList();
   // 同步更新标签高亮
   document.querySelectorAll('#modalBox .tag').forEach(t=>{
     t.classList.toggle('on', t.getAttribute('data-k')===k);
+  });
+  const subRow=document.getElementById('errSubTagRow');
+  if(subRow) subRow.outerHTML=errSubTagRow();
+  else{
+    const tagList=document.getElementById('errTagList');
+    if(tagList && errFilter && MODULES.find(m=>m.key===errFilter) && MODULES.find(m=>m.key===errFilter).subs && MODULES.find(m=>m.key===errFilter).subs.length){
+      tagList.insertAdjacentHTML('afterend', errSubTagRow());
+    }
+  }
+}
+function setErrSubFilter(k){
+  errSubFilter=k;
+  const box=document.getElementById('errFullList');
+  if(box) box.innerHTML=renderFullErrorList();
+  document.querySelectorAll('#errSubTagRow .tag').forEach(t=>{
+    t.classList.toggle('on', t.getAttribute('data-sub')===k);
   });
 }
 /* 单个错题行（压缩：日期+模块+摘要，点击进详情） */
@@ -1304,6 +1454,7 @@ function renderFullErrorList(){
   if(!list.length) return '<div class="empty-state"><div class="emoji">📚</div><div class="txt">暂无错题</div></div>';
   if(errFilter){
     list=list.filter(e=>e.module===errFilter);
+    if(errSubFilter) list=list.filter(e=>e.sub===errSubFilter); // v2.2.17 子模块筛选
     if(!list.length) return '<div class="empty-state"><div class="emoji">📚</div><div class="txt">该分类暂无错题</div></div>';
     return renderSubGrouped(list);
   }
@@ -1774,6 +1925,7 @@ function syncRecordToMistakes(moduleKey, rec){
     const linked=DB.mistakes.find(m=>m.recId===rec.id);
     if(linked){
       linked.module=mod.key;
+      linked.sub=rec.sub||''; // v2.2.17：编辑刷题记录换子模块时同步更新考点子模块
       linked.point=point;
       linked.note=note;
       linked.date=rec.date||todayStr();
@@ -1783,7 +1935,7 @@ function syncRecordToMistakes(moduleKey, rec){
     // 去重：同模块+同内容不重复
     const exist=DB.mistakes.find(m=>m.module===mod.key && m.point===point);
     if(exist) return;
-    DB.mistakes.push({id:uid(),module:mod.key,point,note,date:rec.date||todayStr(),recId:rec.id,updatedAt:Date.now()});
+    DB.mistakes.push({id:uid(),module:mod.key,sub:rec.sub||'',point,note,date:rec.date||todayStr(),recId:rec.id,updatedAt:Date.now()});
   }catch(e){ console.warn('syncRecordToMistakes', e); }
 }
 /* 把错题的知识点自动同步到考点本（mistakes 数组）；带 recId 关联，编辑时更新而非新建 */
@@ -4562,7 +4714,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.14 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.17 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
@@ -5630,6 +5782,39 @@ function init(){
   if(!DB._errSyncedMk){
     syncAllErrorsToMistakes();
     DB._errSyncedMk=true;
+    saveDB();
+  }
+  // 一次性给历史刷题记录生成的考点补子模块（v2.2.17：syncRecordToMistakes 曾漏带 sub）
+  if(!DB._mkSubBackfill){
+    (DB.mistakes||[]).forEach(m=>{
+      if(!m.sub && m.recId){
+        const r=(DB.records||[]).find(x=>x.id===m.recId);
+        if(r && r.sub) m.sub=r.sub;
+      }
+    });
+    DB._mkSubBackfill=true;
+    saveDB();
+  }
+  // v2.2.17 一次性修正：艾宾浩斯改为标准间隔（完成第N轮后隔 1/2/4/7/15 天，6轮封顶）。
+  // 反推完成日（旧 next - 旧间隔）后按新间隔重算；兼容 v2.2.17 已修正过的宽松排期
+  if(!DB._ebbIntervalV3){
+    const OLD = DB._ebbIntervalV2 ? [0,2,4,7,15] : [1,2,4,7,15]; // v2.2.17 宽松间隔 vs 更早错位间隔
+    const fixEbb=(ebb)=>{
+      if(!ebb) return;
+      Object.values(ebb).forEach(st=>{
+        if(!st||st.done||st.pending) return;
+        const s=st.stage||0;
+        if(s<1||!st.next) return;
+        const comp=new Date(st.next+'T00:00:00');
+        if(isNaN(comp.getTime())) return;
+        comp.setDate(comp.getDate()-OLD[s-1]); // 反推完成日
+        const nd=new Date(localDateStr(comp)+'T00:00:00');
+        nd.setDate(nd.getDate()+EBB_DAYS[s]);  // 标准间隔 1/2/4/7/15
+        st.next=localDateStr(nd);
+      });
+    };
+    fixEbb(DB.errorEbb); fixEbb(DB.mistakeEbb);
+    DB._ebbIntervalV3=true;
     saveDB();
   }
   renderBottomNav();
