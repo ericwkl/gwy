@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.12</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.14</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -980,7 +980,7 @@ function migrateDailyToWeekly(){
     if(isNaN(d.getTime())) return;
     const day=(d.getDay()+6)%7+1; // 1=周一…7=周日
     if(!DB.weekTasks.some(w=>w.day===day&&w.text===t.text)){
-      DB.weekTasks.push({id:uid(),day,text:t.text,done:!!t.done});
+      DB.weekTasks.push({id:uid(),day,text:t.text,done:!!t.done,updatedAt:Date.now()});
       migrated++;
     }
   });
@@ -1078,9 +1078,9 @@ function saveWeekTask(day, id){
   if(!DB.weekTasks) DB.weekTasks=[];
   if(id){
     const t=DB.weekTasks.find(x=>x.id===id);
-    if(t) t.text=text;
+    if(t){ t.text=text; t.updatedAt=Date.now(); } // 编辑任务名必须更新时间戳，否则合并时不生效（v2.2.14）
   }else{
-    DB.weekTasks.push({id:uid(),day,text,done:false});
+    DB.weekTasks.push({id:uid(),day,text,done:false,updatedAt:Date.now()});
   }
   saveDB(); closeModal(); renderPlan(); toast('已保存');
 }
@@ -4562,7 +4562,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.12 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.14 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
@@ -5775,7 +5775,10 @@ function loadSupabaseSDK(){
 async function initSupabase(){
   try{
     setSyncState('connecting');
-    const sb = await loadSupabaseSDK();
+    const sb = await Promise.race([
+      loadSupabaseSDK(),
+      new Promise((_, rej)=>setTimeout(()=>rej(new Error('SDK 加载超时')), 15000))
+    ]);
     const cfg = getSupabaseCfg();
     supabaseClient = sb.createClient(cfg.url, cfg.key);
     // 连接探测：查一行（表不存在会报错）
@@ -5794,13 +5797,16 @@ function startSyncPolling(){
     // 仅在自动同步开启且非推送中时静默拉取
     const cfg = getSupabaseCfg();
     if(cfg.auto === false || _syncPushing || !supabaseClient) return;
-    // 检查云端 updated_at 是否比上次拉取新
+    // 检查云端 updated_at 是否比上次拉取新（12s 超时兜底，网络挂起时静默跳过本轮）
     try{
-      const { data, error } = await supabaseClient
-        .from('workbench_sync')
-        .select('updated_at,device')
-        .eq('user_key', getSyncKey())
-        .maybeSingle();
+      const { data, error } = await Promise.race([
+        supabaseClient
+          .from('workbench_sync')
+          .select('updated_at,device')
+          .eq('user_key', getSyncKey())
+          .maybeSingle(),
+        new Promise((_, rej)=>setTimeout(()=>rej(new Error('poll timeout')), 12000))
+      ]);
       if(error || !data) return;
       // 如果云端设备不是本设备，且更新时间比上次同步新，才拉取合并
       if(data.device && data.device !== getDeviceId()){
@@ -6087,11 +6093,11 @@ function mergeById(a, b){
    存量旧数据（两边都无 updatedAt）回退到"谁更长用谁"，防丢内容 */
 function mergeObjFields(cur, x){
   const tu = cur.updatedAt || 0, tv = x.updatedAt || 0;
-  const cloudNewer = !!(tu && tv && tv > tu);       // 两边都有时间戳且云端更新
-  const localNewer = !!(tu && (!tv || tu > tv));    // 本地有时间戳且比云端新（或云端没有时间戳）
+  const cloudNewer = !!(tv && (!tu || tv > tu));       // 云端有时间戳且比本地新（或本地无时间戳）→ 云端为准
+  const localNewer = !!(tu && (!tv || tu > tv));    // 本地有时间戳且比云端新（或云端没有时间戳）→ 本地为准
   const bothOld = !tu && !tv;                        // 两边都是存量旧数据（无时间戳）
   const out = { ...cur };
-  const CONTENT_FIELDS = ['question','improve','book','point','duration','desc','answer','reason','note','content','feishuUrl'];
+  const CONTENT_FIELDS = ['question','improve','book','point','duration','desc','answer','reason','note','content','feishuUrl','text'];
   for(const k of Object.keys(x)){
     if(k === 'id' || k === 'updatedAt') continue;
     const v = x[k], c = out[k];
@@ -6134,7 +6140,7 @@ function mergeObjFields(cur, x){
   return out;
 }
 
-async function syncPullAndMerge(){
+async function _syncPullAndMergeInner(){
   if(!supabaseClient) return;
   try{
     setSyncState('syncing');
@@ -6185,6 +6191,19 @@ async function syncPullAndMerge(){
     if(e && /relation .* does not exist|42P01/.test(String(e.message))){
       toast('云端表不存在：请先在 Supabase SQL Editor 执行「复制建表SQL」');
     }
+  }
+}
+
+/* 同步拉取+合并（带 15s 超时兜底）：手机网络到 supabase.co 挂起时不再永远停在"同步中"，
+   超时后标记未连接并提示，数据仍在本地不丢 */
+async function syncPullAndMerge(){
+  const timer = new Promise((_, rej)=>setTimeout(()=>rej(new Error('sync timeout')), 15000));
+  try{
+    await Promise.race([_syncPullAndMergeInner(), timer]);
+  }catch(e){
+    setSyncState('error');
+    console.warn('[Supabase sync]', e && e.message);
+    if(/timeout/i.test(String(e && e.message))) toast('同步超时：网络连接不上云端，已断开，稍后会重试');
   }
 }
 
