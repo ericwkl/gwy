@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.17</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.18</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -397,7 +397,7 @@ function loadDB(){
       errors:[],           // 错题 {id,module,date,desc,answer,point,photos:[],audio,audioText}
       studyCheckins:{},    // 'YYYY-MM-DD' -> hours
       sportCheckins:{},    // 'YYYY-MM-DD' -> hours
-      papers:[],           // {id,name,type,date,score,duration,modules:{},note}
+      papers:[],           // {id,name,type,examType,date,score,duration,modules:{},note}  examType: 国考/广东省考（仅模考）
       knowledge:[],        // {id,cat,title,content,date}
       tomatoModStats:{},   // {pd:minutes, yy:minutes, ...} 番茄ToDo按模块专注分钟
       schedule:[],         // {id,time,endTime,content,note} 作息规划（时间段）
@@ -707,7 +707,7 @@ function ebbErrorAction(id, action){
     st.stage++;
     if(st.stage>=6){ st.done=true; st.next=''; toast('🎉 6轮复习完成，彻底记住！'); }
     else{
-      // v2.2.17：完成第N轮后隔 EBB_DAYS[N] 天（2/4/7/15）。原错位用 EBB_DAYS[N-1]（1/2/4/7），
+      // v2.2.18：完成第N轮后隔 EBB_DAYS[N] 天（2/4/7/15）。原错位用 EBB_DAYS[N-1]（1/2/4/7），
       // 导致 15号完成第二轮 → 17号（隔2天）；正确应为 19号（隔4天）
       const d=new Date(); d.setDate(d.getDate()+EBB_DAYS[st.stage]);
       st.next=localDateStr(d);
@@ -729,7 +729,7 @@ function ebbMistakeAction(id, action){
     st.stage++;
     if(st.stage>=6){ st.done=true; st.next=''; toast('🎉 6轮复习完成，彻底记住！'); }
     else{
-      // v2.2.17：同错题，完成第N轮后隔 EBB_DAYS[N] 天（2/4/7/15）
+      // v2.2.18：同错题，完成第N轮后隔 EBB_DAYS[N] 天（2/4/7/15）
       const d=new Date(); d.setDate(d.getDate()+EBB_DAYS[st.stage]);
       st.next=localDateStr(d);
       toast('已掌握！第'+(st.stage+1)+'轮在 '+st.next.slice(5)+' 复习');
@@ -744,7 +744,7 @@ function ebbMistakeAction(id, action){
 }
 /* 全部待复习错题弹窗（按模块分类筛选） */
 let ebbErrFilter='';
-let ebbErrSubFilter=''; // v2.2.17 待复习错题子模块筛选
+let ebbErrSubFilter=''; // v2.2.18 待复习错题子模块筛选
 function showAllErrorEbb(){
   _detailReturnFn='showAllErrorEbb'; // 标记：从待复习列表进入详情，返回时回到列表
   const today=todayStr();
@@ -798,7 +798,7 @@ function setEbbErrSubFilter(k){
 }
 /* 全部待复习易错考点弹窗（按模块/子模块分类筛选） */
 let ebbMkFilter='';
-let ebbMkSubFilter=''; // v2.2.17 待复习考点子模块筛选
+let ebbMkSubFilter=''; // v2.2.18 待复习考点子模块筛选
 function showAllMistakeEbb(){
   _detailReturnFnMistake='showAllMistakeEbb'; // 标记：从待复习列表进入详情，返回时回到列表
   const today=todayStr();
@@ -851,7 +851,7 @@ function setEbbMkSubFilter(k){
 }
 /* 考点本弹窗（全部考点，类似错题本，从主页「管理」进入） */
 let mkListFilter='';
-let mkListSubFilter=''; // v2.2.17 考点本子模块筛选（如 判断推理→图形推理）
+let mkListSubFilter=''; // v2.2.18 考点本子模块筛选（如 判断推理→图形推理）
 let _mkListScroll=0; // 考点本滚动位置记忆（详情返回时恢复）
 let _detailReturnFnMistake=null;
 function mistakeListModal(){
@@ -1201,7 +1201,7 @@ function saveWeekTask(day, id){
   if(!DB.weekTasks) DB.weekTasks=[];
   if(id){
     const t=DB.weekTasks.find(x=>x.id===id);
-    if(t){ t.text=text; t.updatedAt=Date.now(); } // 编辑任务名必须更新时间戳，否则合并时不生效（v2.2.17）
+    if(t){ t.text=text; t.updatedAt=Date.now(); } // 编辑任务名必须更新时间戳，否则合并时不生效（v2.2.18）
   }else{
     DB.weekTasks.push({id:uid(),day,text,done:false,updatedAt:Date.now()});
   }
@@ -1385,7 +1385,7 @@ function renderErrorList(limit){
 
 /* 完整错题本弹窗（查看全部错题，可按模块/子模块筛选） */
 let errFilter='';
-let errSubFilter=''; // v2.2.17 错题本子模块筛选
+let errSubFilter=''; // v2.2.18 错题本子模块筛选
 function errorListModal(){
   _detailReturnFn='errorListModal'; // 标记：从错题本进入详情，返回时回到错题本
   const tags=[['','全部']].concat(MODULES.map(m=>[m.key,m.name]))
@@ -1454,7 +1454,7 @@ function renderFullErrorList(){
   if(!list.length) return '<div class="empty-state"><div class="emoji">📚</div><div class="txt">暂无错题</div></div>';
   if(errFilter){
     list=list.filter(e=>e.module===errFilter);
-    if(errSubFilter) list=list.filter(e=>e.sub===errSubFilter); // v2.2.17 子模块筛选
+    if(errSubFilter) list=list.filter(e=>e.sub===errSubFilter); // v2.2.18 子模块筛选
     if(!list.length) return '<div class="empty-state"><div class="emoji">📚</div><div class="txt">该分类暂无错题</div></div>';
     return renderSubGrouped(list);
   }
@@ -1925,7 +1925,7 @@ function syncRecordToMistakes(moduleKey, rec){
     const linked=DB.mistakes.find(m=>m.recId===rec.id);
     if(linked){
       linked.module=mod.key;
-      linked.sub=rec.sub||''; // v2.2.17：编辑刷题记录换子模块时同步更新考点子模块
+      linked.sub=rec.sub||''; // v2.2.18：编辑刷题记录换子模块时同步更新考点子模块
       linked.point=point;
       linked.note=note;
       linked.date=rec.date||todayStr();
@@ -3610,10 +3610,10 @@ let paperFilter='全部'; // 全部/模考/真题
 function renderPaper(){
   const all=[...DB.papers].sort((a,b)=>b.date.localeCompare(a.date));
   const list=paperFilter==='全部'?all:all.filter(p=>p.type===paperFilter);
-  // 分类统计
+  // 分类统计（v2.2.18：模考按类型细分 国考/广东省考）
   const statByType={};
   all.forEach(p=>{
-    const t=p.type||'模考';
+    const t=(p.type==='模考'&&p.examType)?('模考·'+p.examType):(p.type||'模考');
     if(!statByType[t]) statByType[t]={count:0,scoreSum:0,rateSum:0,rateCount:0};
     statByType[t].count++;
     if(p.score>0){ statByType[t].scoreSum+=p.score; statByType[t].rateCount++; }
@@ -3640,7 +3640,9 @@ function renderPaper(){
     const td=Object.values(p.modules||{}).reduce((s,v)=>s+(v&&typeof v==='object'&&v.duration?v.duration:0),0);
     const rate=tt>0?Math.round(tc/tt*100)+'%':'';
     const totalDur = p.duration || td;
-    const typeBadge=p.type==='真题'?'<span style="font-size:10px;padding:1px 6px;border-radius:6px;background:var(--accent-soft);color:var(--accent);margin-left:6px;">真题</span>':'<span style="font-size:10px;padding:1px 6px;border-radius:6px;background:var(--primary-soft);color:var(--primary);margin-left:6px;">模考</span>';
+    const typeBadge=p.type==='真题'
+      ?'<span style="font-size:10px;padding:1px 6px;border-radius:6px;background:var(--accent-soft);color:var(--accent);margin-left:6px;">真题</span>'
+      :`<span style="font-size:10px;padding:1px 6px;border-radius:6px;background:var(--primary-soft);color:var(--primary);margin-left:6px;">模考${p.examType?'·'+p.examType:''}</span>`;
     return `<div class="paper-item">
       <div class="p-head">
         <div><div class="p-name">${p.name}${typeBadge}</div>
@@ -3670,29 +3672,40 @@ function renderPaper(){
     ${all.length?`<div class="card">
       <div class="card-title"><span class="left"><span class="emoji">📈</span>分数变化曲线</span></div>
       <div class="chart-box"><canvas id="paperChart"></canvas></div>
-      <div style="font-size:10px;color:var(--text-light);margin-top:4px;text-align:center;">绿色=模考 橙色=真题（按考试日期排序）</div>
+      <div style="font-size:10px;color:var(--text-light);margin-top:4px;text-align:center;">绿色=国考模考 蓝色=广东省考模考 橙色=真题（按考试日期排序）</div>
     </div>`:''}`;
   if(all.length) renderPaperChart();
 }
 function setPaperFilter(t){ paperFilter=t; renderPaper(); }
 function renderPaperChart(){
-  const mk=[...DB.papers].filter(p=>p.type!=='真题').sort((a,b)=>a.date.localeCompare(b.date));
-  const zt=[...DB.papers].filter(p=>p.type==='真题').sort((a,b)=>a.date.localeCompare(b.date));
-  const mkLabels=mk.map(p=>p.date.slice(5)+' '+p.name.slice(0,6));
-  const ztLabels=zt.map(p=>p.date.slice(5)+' '+p.name.slice(0,6));
+  // v2.2.18：按模考类型分色（国考绿/广东省考蓝/真题橙），各线按考试日期轴对齐；
+  // 旧模考（无类型）不单独成线，编辑补选类型后自动进入对应曲线
+  const series=[
+    {key:'国考',      filter:p=>p.type==='模考'&&p.examType==='国考',      color:'#5b8a5a', fill:'rgba(91,138,90,.08)'},
+    {key:'广东省考',  filter:p=>p.type==='模考'&&p.examType==='广东省考',  color:'#4a7bb5', fill:'rgba(74,123,181,.08)'},
+    {key:'真题',      filter:p=>p.type==='真题',                            color:'#c08552', fill:'rgba(192,133,82,.08)'},
+  ].map(s=>{
+    const items=[...DB.papers].filter(s.filter).sort((a,b)=>a.date.localeCompare(b.date));
+    return {key:s.key,color:s.color,fill:s.fill,items};
+  }).filter(s=>s.items.length);
+  const labelOf=p=>p.date.slice(5)+' '+p.name.slice(0,6);
+  const allLabels=[...new Set(DB.papers.map(labelOf))].sort();
   const ctx=document.getElementById('paperChart');
   if(paperChart) paperChart.destroy();
   paperChart=new Chart(ctx,{
     type:'line',
-    data:{labels:[...new Set([...mkLabels,...ztLabels])],
-      datasets:[
-        {label:'模考正确率(%)',data:mkLabels.map((l,i)=>mk[i].score),borderColor:'#5b8a5a',backgroundColor:'rgba(91,138,90,.08)',fill:true,tension:.3,pointRadius:4,spanGaps:true},
-        {label:'真题正确率(%)',data:ztLabels.map((l,i)=>zt[i].score),borderColor:'#c08552',backgroundColor:'rgba(192,133,82,.08)',fill:true,tension:.3,pointRadius:4,spanGaps:true},
-      ]},
+    data:{labels:allLabels,
+      datasets:series.map(s=>{
+        const byKey={};
+        s.items.forEach(p=>{ byKey[labelOf(p)]=p.score; });
+        return {label:s.key+'分数',data:allLabels.map(l=>byKey[l]!==undefined?byKey[l]:null),
+          borderColor:s.color,backgroundColor:s.fill,fill:true,tension:.3,pointRadius:4,spanGaps:true};
+      })},
     options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'top',labels:{font:{size:9},boxWidth:10,boxHeight:10}}},scales:{y:{beginAtZero:true,max:100,ticks:{font:{size:10}}},x:{ticks:{font:{size:8}}}}}
   });
 }
 const PAPER_TYPES=['模考','真题'];
+const PAPER_EXAM_TYPES=['国考','广东省考']; // v2.2.18 模考类型（国考/广东省考），曲线分色显示
 const PAPER_MODULES=['政治理论','常识判断','言语理解','判断推理','数量关系','资料分析'];
 function paperModal(id){
   paperModalId=id||'';
@@ -3700,6 +3713,8 @@ function paperModal(id){
   let p=null;
   if(id) p=DB.papers.find(x=>x.id===id);
   const typeOpts=PAPER_TYPES.map(t=>`<option value="${t}" ${p&&p.type===t?'selected':''}>${t}</option>`).join('');
+  const examOpts=[''].concat(PAPER_EXAM_TYPES).map(t=>`<option value="${t}" ${p&&p.examType===t?'selected':''}>${t||'未选择'}</option>`).join('');
+  const isMk=!p||p.type==='模考'; // 新增默认类型=模考 → 显示模考类型行
   const modInputs=PAPER_MODULES.map(m=>{
     const mv=p&&p.modules?p.modules[m]:null;
     const correct=(mv&&typeof mv==='object')?mv.correct||'':'';
@@ -3716,8 +3731,12 @@ function paperModal(id){
   openModal(`<div class="modal-head"><h3>${id?'编辑':'新增'}试卷</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div class="form-group"><label>试卷名称</label><input id="pp_name" value="${p?p.name:''}" placeholder="如：2025省考行测模拟一"></div>
     <div class="form-row">
-      <div class="form-group"><label>类型</label><select id="pp_type">${typeOpts}</select></div>
+      <div class="form-group"><label>类型</label><select id="pp_type" onchange="togglePaperExamType()">${typeOpts}</select></div>
       <div class="form-group"><label>做题日期</label><input type="date" id="pp_date" value="${p?p.date:todayStr()}"></div>
+    </div>
+    <div class="form-row" id="pp_exam_row" style="${isMk?'':'display:none;'}">
+      <div class="form-group"><label>模考类型</label><select id="pp_exam_type"><option value="" ${!p||!p.examType?'selected':''}>未选择</option>${PAPER_EXAM_TYPES.map(t=>`<option value="${t}" ${p&&p.examType===t?'selected':''}>${t}</option>`).join('')}</select></div>
+      <div class="form-group"><label>考试目标</label><div style="font-size:11px;color:var(--text-light);padding-top:6px;">国考 / 广东省考 分数曲线用不同颜色区分</div></div>
     </div>
     <div class="form-group">
       <label>各模块做题情况（正确数 / 总数 / 用时，正确率自动计算）</label>
@@ -3753,6 +3772,17 @@ function paperModal(id){
       <button class="btn" style="flex:1" onclick="paperModalCanceled=true; savePaper('${id||''}')">保存</button>
     </div>`);
   updatePaperSummary();
+}
+/* v2.2.18 类型切换：模考显示"模考类型"（国考/广东省考），真题隐藏并清空 */
+function togglePaperExamType(){
+  const typeSel=document.getElementById('pp_type');
+  const row=document.getElementById('pp_exam_row');
+  if(!typeSel||!row) return;
+  row.style.display=(typeSel.value==='模考')?'':'none';
+  if(typeSel.value!=='模考'){
+    const es=document.getElementById('pp_exam_type');
+    if(es) es.value='';
+  }
 }
 /* 试卷弹窗：记录当前编辑id；遮罩/✕关闭时自动保存，防止填了内容丢失 */
 let paperModalId='';
@@ -3852,6 +3882,8 @@ function savePaper(id, opts){
   opts=opts||{};
   let name=document.getElementById('pp_name').value.trim();
   const type=document.getElementById('pp_type').value;
+  const examTypeEl=document.getElementById('pp_exam_type');
+  const examType=(type==='模考'&&examTypeEl)?examTypeEl.value:'';
   const date=document.getElementById('pp_date').value;
   const note=document.getElementById('pp_note').value.trim();
   if(!date){ toast('请选择日期'); return false; }
@@ -3880,9 +3912,9 @@ function savePaper(id, opts){
   const analysis=(analysisText||analysisUrl)?{text:analysisText,feishuUrl:analysisUrl,updatedAt:todayStr()}:undefined;
   if(id){
     const p=DB.papers.find(x=>x.id===id);
-    Object.assign(p,{name,type,date,score,duration,modules,note,analysis,updatedAt:Date.now()});
+    Object.assign(p,{name,type,examType,date,score,duration,modules,note,analysis,updatedAt:Date.now()});
   }else{
-    DB.papers.push({id:uid(),name,type,date,score,duration,modules,note,analysis,updatedAt:Date.now()});
+    DB.papers.push({id:uid(),name,type,examType,date,score,duration,modules,note,analysis,updatedAt:Date.now()});
   }
   saveDB(); closeModal(); renderPaper(); toast('已保存');
   return true;
@@ -4714,7 +4746,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.17 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.18 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
@@ -5784,7 +5816,7 @@ function init(){
     DB._errSyncedMk=true;
     saveDB();
   }
-  // 一次性给历史刷题记录生成的考点补子模块（v2.2.17：syncRecordToMistakes 曾漏带 sub）
+  // 一次性给历史刷题记录生成的考点补子模块（v2.2.18：syncRecordToMistakes 曾漏带 sub）
   if(!DB._mkSubBackfill){
     (DB.mistakes||[]).forEach(m=>{
       if(!m.sub && m.recId){
@@ -5795,10 +5827,10 @@ function init(){
     DB._mkSubBackfill=true;
     saveDB();
   }
-  // v2.2.17 一次性修正：艾宾浩斯改为标准间隔（完成第N轮后隔 1/2/4/7/15 天，6轮封顶）。
-  // 反推完成日（旧 next - 旧间隔）后按新间隔重算；兼容 v2.2.17 已修正过的宽松排期
+  // v2.2.18 一次性修正：艾宾浩斯改为标准间隔（完成第N轮后隔 1/2/4/7/15 天，6轮封顶）。
+  // 反推完成日（旧 next - 旧间隔）后按新间隔重算；兼容 v2.2.18 已修正过的宽松排期
   if(!DB._ebbIntervalV3){
-    const OLD = DB._ebbIntervalV2 ? [0,2,4,7,15] : [1,2,4,7,15]; // v2.2.17 宽松间隔 vs 更早错位间隔
+    const OLD = DB._ebbIntervalV2 ? [0,2,4,7,15] : [1,2,4,7,15]; // v2.2.18 宽松间隔 vs 更早错位间隔
     const fixEbb=(ebb)=>{
       if(!ebb) return;
       Object.values(ebb).forEach(st=>{
