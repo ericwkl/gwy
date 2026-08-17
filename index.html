@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.21</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.22</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -707,7 +707,7 @@ function ebbErrorAction(id, action){
     st.stage++;
     if(st.stage>=6){ st.done=true; st.next=''; toast('🎉 6轮复习完成，彻底记住！'); }
     else{
-      // v2.2.21：完成第N轮后隔 EBB_DAYS[N] 天（2/4/7/15）。原错位用 EBB_DAYS[N-1]（1/2/4/7），
+      // v2.2.22：完成第N轮后隔 EBB_DAYS[N] 天（2/4/7/15）。原错位用 EBB_DAYS[N-1]（1/2/4/7），
       // 导致 15号完成第二轮 → 17号（隔2天）；正确应为 19号（隔4天）
       const d=new Date(); d.setDate(d.getDate()+EBB_DAYS[st.stage]);
       st.next=localDateStr(d);
@@ -729,7 +729,7 @@ function ebbMistakeAction(id, action){
     st.stage++;
     if(st.stage>=6){ st.done=true; st.next=''; toast('🎉 6轮复习完成，彻底记住！'); }
     else{
-      // v2.2.21：同错题，完成第N轮后隔 EBB_DAYS[N] 天（2/4/7/15）
+      // v2.2.22：同错题，完成第N轮后隔 EBB_DAYS[N] 天（2/4/7/15）
       const d=new Date(); d.setDate(d.getDate()+EBB_DAYS[st.stage]);
       st.next=localDateStr(d);
       toast('已掌握！第'+(st.stage+1)+'轮在 '+st.next.slice(5)+' 复习');
@@ -744,7 +744,7 @@ function ebbMistakeAction(id, action){
 }
 /* 全部待复习错题弹窗（按模块分类筛选） */
 let ebbErrFilter='';
-let ebbErrSubFilter=''; // v2.2.21 待复习错题子模块筛选
+let ebbErrSubFilter=''; // v2.2.22 待复习错题子模块筛选
 function showAllErrorEbb(){
   _detailReturnFn='showAllErrorEbb'; // 标记：从待复习列表进入详情，返回时回到列表
   const today=todayStr();
@@ -798,7 +798,7 @@ function setEbbErrSubFilter(k){
 }
 /* 全部待复习易错考点弹窗（按模块/子模块分类筛选） */
 let ebbMkFilter='';
-let ebbMkSubFilter=''; // v2.2.21 待复习考点子模块筛选
+let ebbMkSubFilter=''; // v2.2.22 待复习考点子模块筛选
 function showAllMistakeEbb(){
   _detailReturnFnMistake='showAllMistakeEbb'; // 标记：从待复习列表进入详情，返回时回到列表
   const today=todayStr();
@@ -851,7 +851,7 @@ function setEbbMkSubFilter(k){
 }
 /* 考点本弹窗（全部考点，类似错题本，从主页「管理」进入） */
 let mkListFilter='';
-let mkListSubFilter=''; // v2.2.21 考点本子模块筛选（如 判断推理→图形推理）
+let mkListSubFilter=''; // v2.2.22 考点本子模块筛选（如 判断推理→图形推理）
 let _mkListScroll=0; // 考点本滚动位置记忆（详情返回时恢复）
 let _detailReturnFnMistake=null;
 function mistakeListModal(){
@@ -1201,7 +1201,7 @@ function saveWeekTask(day, id){
   if(!DB.weekTasks) DB.weekTasks=[];
   if(id){
     const t=DB.weekTasks.find(x=>x.id===id);
-    if(t){ t.text=text; t.updatedAt=Date.now(); } // 编辑任务名必须更新时间戳，否则合并时不生效（v2.2.21）
+    if(t){ t.text=text; t.updatedAt=Date.now(); } // 编辑任务名必须更新时间戳，否则合并时不生效（v2.2.22）
   }else{
     DB.weekTasks.push({id:uid(),day,text,done:false,updatedAt:Date.now()});
   }
@@ -1385,7 +1385,7 @@ function renderErrorList(limit){
 
 /* 完整错题本弹窗（查看全部错题，可按模块/子模块筛选） */
 let errFilter='';
-let errSubFilter=''; // v2.2.21 错题本子模块筛选
+let errSubFilter=''; // v2.2.22 错题本子模块筛选
 function errorListModal(){
   _detailReturnFn='errorListModal'; // 标记：从错题本进入详情，返回时回到错题本
   const tags=[['','全部']].concat(MODULES.map(m=>[m.key,m.name]))
@@ -1454,7 +1454,7 @@ function renderFullErrorList(){
   if(!list.length) return '<div class="empty-state"><div class="emoji">📚</div><div class="txt">暂无错题</div></div>';
   if(errFilter){
     list=list.filter(e=>e.module===errFilter);
-    if(errSubFilter) list=list.filter(e=>e.sub===errSubFilter); // v2.2.21 子模块筛选
+    if(errSubFilter) list=list.filter(e=>e.sub===errSubFilter); // v2.2.22 子模块筛选
     if(!list.length) return '<div class="empty-state"><div class="emoji">📚</div><div class="txt">该分类暂无错题</div></div>';
     return renderSubGrouped(list);
   }
@@ -1925,7 +1925,7 @@ function syncRecordToMistakes(moduleKey, rec){
     const linked=DB.mistakes.find(m=>m.recId===rec.id);
     if(linked){
       linked.module=mod.key;
-      linked.sub=rec.sub||''; // v2.2.21：编辑刷题记录换子模块时同步更新考点子模块
+      linked.sub=rec.sub||''; // v2.2.22：编辑刷题记录换子模块时同步更新考点子模块
       linked.point=point;
       linked.note=note;
       linked.date=rec.date||todayStr();
@@ -2236,13 +2236,15 @@ function confirmDelReview(id){ delReview(id); closeModal(); }
    ============================================================ */
 let _errorPhotos=[];
 let _errorEditSub='';
+let _errorEditId=''; // v2.2.22 编辑中的错题 id（取消编辑时回详情）
 function errorModal(id){
   let e=null;
   if(id) e=DB.errors.find(x=>x.id===id);
+  _errorEditId=id||'';
   _errorPhotos = e&&e.photos?[...e.photos]:[];
   _errorEditSub = e&&e.sub?e.sub:'';
   const modOptions = MODULES.map(m=>`<option value="${m.key}" ${e&&e.module===m.key?'selected':''}>${m.icon} ${m.name}</option>`).join('');
-  openModal(`<div class="modal-head"><h3>${id?'编辑':'新增'}错题</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
+  openModal(`<div class="modal-head"><h3>${id?'编辑':'新增'}错题</h3><button class="modal-close" onclick="backFromEditError()">✕</button></div>
     <div class="form-row">
       <div class="form-group"><label>归属学习板块</label><select id="er_module" onchange="updateErrSubSelect()">${modOptions}</select></div>
       <div class="form-group"><label>做题日期</label><input type="date" id="er_date" value="${e?e.date:todayStr()}"></div>
@@ -2273,11 +2275,17 @@ function errorModal(id){
     <div class="form-group"><label>知识点与思考</label><textarea id="er_point" placeholder="薄弱知识点、解题思路">${e?e.point||'':''}</textarea></div>
     <div class="modal-foot">
       ${id?`<button class="btn btn-danger" style="flex:1" onclick="confirmDelError('${id}')">删除</button>`:''}
-      <button class="btn btn-outline" style="flex:1" onclick="closeModal()">取消</button>
+      <button class="btn btn-outline" style="flex:1" onclick="backFromEditError()">取消</button>
       <button class="btn" style="flex:1" onclick="saveError('${id||''}')">保存</button>
     </div>`);
   renderErrorPhotos();
   updateErrSubSelect();
+}
+/* v2.2.22 取消错题编辑：编辑中回详情，新增回上一页（列表/主页） */
+function backFromEditError(){
+  const id=_errorEditId||'';
+  if(id){ viewErrorDetail(id); return; }
+  backFromErrorDetail();
 }
 /* 根据所选模块刷新子模块下拉（如 判断推理→科学推理） */
 function updateErrSubSelect(){
@@ -3610,7 +3618,7 @@ let paperFilter='全部'; // 全部/模考/真题
 function renderPaper(){
   const all=[...DB.papers].sort((a,b)=>b.date.localeCompare(a.date));
   const list=paperFilter==='全部'?all:all.filter(p=>p.type===paperFilter);
-  // 分类统计（v2.2.21：模考按类型细分 国考/广东省考）
+  // 分类统计（v2.2.22：模考按类型细分 国考/广东省考）
   const statByType={};
   all.forEach(p=>{
     const t=(p.type==='模考'&&p.examType)?('模考·'+p.examType):(p.type||'模考');
@@ -3678,7 +3686,7 @@ function renderPaper(){
 }
 function setPaperFilter(t){ paperFilter=t; renderPaper(); }
 function renderPaperChart(){
-  // v2.2.21：按模考类型分色（国考绿/广东省考蓝/真题橙），各线按考试日期轴对齐；
+  // v2.2.22：按模考类型分色（国考绿/广东省考蓝/真题橙），各线按考试日期轴对齐；
   // 旧模考（无类型）不单独成线，编辑补选类型后自动进入对应曲线
   const series=[
     {key:'国考',      filter:p=>p.type==='模考'&&p.examType==='国考',      color:'#5b8a5a', fill:'rgba(91,138,90,.08)'},
@@ -3705,7 +3713,7 @@ function renderPaperChart(){
   });
 }
 const PAPER_TYPES=['模考','真题'];
-const PAPER_EXAM_TYPES=['国考','广东省考']; // v2.2.21 模考类型（国考/广东省考），曲线分色显示
+const PAPER_EXAM_TYPES=['国考','广东省考']; // v2.2.22 模考类型（国考/广东省考），曲线分色显示
 const PAPER_MODULES=['政治理论','常识判断','言语理解','判断推理','数量关系','资料分析'];
 function paperModal(id){
   paperModalId=id||'';
@@ -3773,7 +3781,7 @@ function paperModal(id){
     </div>`);
   updatePaperSummary();
 }
-/* v2.2.21 类型切换：模考显示"模考类型"（国考/广东省考），真题隐藏并清空 */
+/* v2.2.22 类型切换：模考显示"模考类型"（国考/广东省考），真题隐藏并清空 */
 function togglePaperExamType(){
   const typeSel=document.getElementById('pp_type');
   const row=document.getElementById('pp_exam_row');
@@ -4751,20 +4759,22 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.21 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.22 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
 let _mistakeEditSub='';
 let _mistakePhotos=[];
+let _mistakeEditId=''; // v2.2.22 编辑中的考点 id（取消编辑时回详情）
 function mistakeModal(id){
   let m=null;
   if(id) m=DB.mistakes.find(x=>x.id===id);
+  _mistakeEditId=id||'';
   _mistakeEditSub = m&&m.sub?m.sub:'';
   _mistakePhotos = m&&m.photos?[...m.photos]:[];
   const mkMod = m ? (MODULES.find(x=>x.key===m.module)||MODULES.find(x=>x.name===m.module)||null) : null;
   const modOptions=MODULES.map(x=>`<option value="${x.key}" ${mkMod&&mkMod.key===x.key?'selected':''}>${x.icon} ${x.name}</option>`).join('');
-  openModal(`<div class="modal-head"><h3>${id?'编辑':'添加'}考点</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
+  openModal(`<div class="modal-head"><h3>${id?'编辑':'添加'}考点</h3><button class="modal-close" onclick="backFromEditMistake()">✕</button></div>
     <div class="form-row">
       <div class="form-group" style="flex:1;"><label>所属模块</label><select id="mk_module" onchange="updateMkSubSelect()">${modOptions}</select></div>
       <div class="form-group" style="flex:1;"><label>子模块</label><select id="mk_sub"></select></div>
@@ -4776,11 +4786,17 @@ function mistakeModal(id){
       <div id="mistakePhotos" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;"></div>
     </div>
     <div class="modal-foot">
-      <button class="btn btn-outline" style="flex:1" onclick="closeModal()">取消</button>
+      <button class="btn btn-outline" style="flex:1" onclick="backFromEditMistake()">取消</button>
       <button class="btn" style="flex:1" onclick="saveMistake('${id||''}')">保存</button>
     </div>`);
   updateMkSubSelect();
   renderMistakePhotos();
+}
+/* v2.2.22 取消考点编辑：编辑中回详情，新增回上一页（列表/主页） */
+function backFromEditMistake(){
+  const id=_mistakeEditId||'';
+  if(id){ viewMistakeDetail(id); return; }
+  backFromMistakeDetail();
 }
 /* 考点图片预览（含删除） */
 function renderMistakePhotos(){
@@ -5822,7 +5838,7 @@ function init(){
     DB._errSyncedMk=true;
     saveDB();
   }
-  // 一次性给历史刷题记录生成的考点补子模块（v2.2.21：syncRecordToMistakes 曾漏带 sub）
+  // 一次性给历史刷题记录生成的考点补子模块（v2.2.22：syncRecordToMistakes 曾漏带 sub）
   if(!DB._mkSubBackfill){
     (DB.mistakes||[]).forEach(m=>{
       if(!m.sub && m.recId){
@@ -5833,10 +5849,10 @@ function init(){
     DB._mkSubBackfill=true;
     saveDB();
   }
-  // v2.2.21 一次性修正：艾宾浩斯改为标准间隔（完成第N轮后隔 1/2/4/7/15 天，6轮封顶）。
-  // 反推完成日（旧 next - 旧间隔）后按新间隔重算；兼容 v2.2.21 已修正过的宽松排期
+  // v2.2.22 一次性修正：艾宾浩斯改为标准间隔（完成第N轮后隔 1/2/4/7/15 天，6轮封顶）。
+  // 反推完成日（旧 next - 旧间隔）后按新间隔重算；兼容 v2.2.22 已修正过的宽松排期
   if(!DB._ebbIntervalV3){
-    const OLD = DB._ebbIntervalV2 ? [0,2,4,7,15] : [1,2,4,7,15]; // v2.2.21 宽松间隔 vs 更早错位间隔
+    const OLD = DB._ebbIntervalV2 ? [0,2,4,7,15] : [1,2,4,7,15]; // v2.2.22 宽松间隔 vs 更早错位间隔
     const fixEbb=(ebb)=>{
       if(!ebb) return;
       Object.values(ebb).forEach(st=>{
