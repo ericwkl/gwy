@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.28</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.29</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -1370,15 +1370,12 @@ function setRvFilter(k){
 function renderErrorList(limit){
   const list = [...DB.errors].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,limit||100);
   if(!list.length) return '<div class="empty-state"><div class="emoji">📚</div><div class="txt">暂无错题记录</div></div>';
-  // 压缩显示：日期+模块+摘要+复习轮次，点击进详情
+  // 压缩显示：日期+模块+摘要，点击进详情（注：此函数当前无调用点，错题本实际用 errorItemHtml）
   return list.map(e=>{
     const mod = MODULES.find(m=>m.key===e.module);
     const badge=mod?mod.icon+' '+mod.name+(e.sub?'·'+e.sub:''):'未分类';
-    const st=getErrorEbb(e);
-    const round=st.done?'✅ 已掌握':'第'+(st.stage+1)+'轮';
     return `<div class="error-item" style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:9px 10px;" onclick="viewErrorDetail('${e.id}')">
       <span class="r-tag" style="flex-shrink:0;margin:0;font-size:10px;white-space:nowrap;">${badge}</span>
-      <span style="flex-shrink:0;font-size:10px;color:var(--accent);background:var(--accent-soft);padding:0 6px;border-radius:6px;white-space:nowrap;">${round}</span>
       <span style="flex:1;min-width:0;font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(e.desc||'无题目')}</span>
       <span class="r-time" style="flex-shrink:0;margin:0;font-size:10px;">${e.date}</span>
       <span style="color:var(--text-light);font-size:11px;flex-shrink:0;">›</span>
@@ -1445,8 +1442,11 @@ function setErrSubFilter(k){
 function errorItemHtml(e, tagPrefix){
   const mod=MODULES.find(m=>m.key===e.module);
   const badge=mod?mod.icon+' '+mod.name+(e.sub?'·'+e.sub:''):'未分类';
+  const st=getErrorEbb(e);
+  const round=st.done?'✅ 已掌握':'第'+(st.stage+1)+'轮';
   return `<div class="error-item" style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:9px 10px;" onclick="viewErrorDetail('${e.id}')">
     <span class="r-tag" style="flex-shrink:0;margin:0;font-size:10px;white-space:nowrap;">${badge}</span>
+    <span style="flex-shrink:0;font-size:10px;color:var(--accent);background:var(--accent-soft);padding:0 6px;border-radius:6px;white-space:nowrap;">${round}</span>
     <span style="flex:1;min-width:0;font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(e.desc||'无题目')}</span>
     <span class="r-time" style="flex-shrink:0;margin:0;font-size:10px;">${e.date}</span>
     <span style="color:var(--text-light);font-size:11px;flex-shrink:0;">›</span>
@@ -4762,7 +4762,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.28 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.29 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
