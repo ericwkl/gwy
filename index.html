@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.29</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.30</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -4762,7 +4762,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.29 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.30 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
@@ -5311,11 +5311,12 @@ function parseShenlunContent(records){
   const results=[];
   let curTopic='';
   let curSections={}; // {type: [texts]}
+  let curType='观点'; // 当前子分类：显式记录"最近遇到的子分类标题"，避免 Object.keys 顺序(首次插入序)误导
   const flushTopic=()=>{
     if(Object.values(curSections).some(a=>a&&a.length)){
       results.push({topic:curTopic||'未分类', sections:curSections});
     }
-    curTopic=''; curSections={};
+    curTopic=''; curSections={}; curType='观点';
   };
   records.forEach(k=>{
     const txt=(k.content||'');
@@ -5325,7 +5326,8 @@ function parseShenlunContent(records){
       // 1) 子分类标题（独立行，可带【】或冒号）："开篇金句"、"点明观点："、"【金句】"
       const subTitle=line.match(new RegExp(`^[【\\[]?(${subTypeRe})[】\\]]?[:：]?$`));
       if(subTitle){
-        curSections[subTitle[1]]=curSections[subTitle[1]]||[];
+        curType=subTitle[1];
+        curSections[curType]=curSections[curType]||[];
         continue;
       }
       // 1.5) 编号+子分类标题："（一）开篇金句"、"1. 金句"（视为子分类而非话题）
@@ -5333,6 +5335,7 @@ function parseShenlunContent(records){
                         line.match(new RegExp(`^\\d+[.、]\\s*(${subTypeRe})[：:]?$`));
       if(numberedSub){
         const t=numberedSub[1];
+        curType=t;
         curSections[t]=curSections[t]||[];
         continue;
       }
@@ -5344,7 +5347,7 @@ function parseShenlunContent(records){
       if(isTopic){
         flushTopic();
         curTopic=line;
-        curSections={};
+        curSections={}; curType='观点';
         continue;
       }
       // 3) 大目录标题（跳过）
@@ -5355,12 +5358,11 @@ function parseShenlunContent(records){
       if(/^[一二三四五六七八九十]+[、，]/.test(line)&&line.length<=20){
         flushTopic();
         curTopic=line;
-        curSections={};
+        curSections={}; curType='观点';
         continue;
       }
-      // 6) 普通内容：归到当前子分类（默认"观点"）
-      const typesArr=Object.keys(curSections);
-      const type=typesArr.length?typesArr[typesArr.length-1]:'观点';
+      // 6) 普通内容：归到当前子分类（curType = 最近遇到的子分类标题）
+      const type=curType;
       if(!curSections[type]) curSections[type]=[];
       if(type==='案例举证'||type==='案例'){
         // 案例块：以"案例X："开头开始新案例，其余行追加到当前案例
