@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.31</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.32</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -1942,7 +1942,7 @@ function syncRecordToMistakes(moduleKey, rec){
   }catch(e){ console.warn('syncRecordToMistakes', e); }
 }
 /* 把错题的知识点自动同步到考点本（mistakes 数组）；带 recId 关联，编辑时更新而非新建 */
-function syncErrorToMistakes(err){
+function syncErrorToMistakes(err, oldSnap){
   try{
     const modKey=err.module;
     const point=(err.point||'').trim();
@@ -1955,9 +1955,26 @@ function syncErrorToMistakes(err){
       linked.updatedAt=Date.now();
       return;
     }
-    // 去重：同模块 + 知识点首行已存在则不重复
-    const exists=DB.mistakes.find(m=>m.module===modKey && (m.point||'').split('\n')[0].trim()===point);
-    if(exists) return;
+    // v2.2.32 兼容：早期/批量导入产生的考点可能没有 recId（或 recId 指向已删除的错题），
+    // 于是编辑错题时 recId 关联落空 → 新建出重复考点。
+    // 这里用「编辑前的知识点首行 + 编辑前的模块」认领原考点，命中即覆盖并补回 recId。
+    // 关键：必须拿编辑前的内容去匹配 —— 编辑后内容已变，用新内容永远找不到原考点。
+    const firstLineOf=s=>((s||'').split('\n')[0]||'').trim();
+    const orphan=m=>!m.recId || !(DB.errors||[]).some(x=>x.id===m.recId);
+    const cands=[];
+    if(oldSnap&&oldSnap.point) cands.push({mod:oldSnap.module||modKey, fl:firstLineOf(oldSnap.point)});
+    cands.push({mod:modKey, fl:firstLineOf(point)}); // 内容未变 / 新建时的兜底
+    for(const c of cands){
+      if(!c.fl) continue;
+      const hit=DB.mistakes.find(m=>m.module===c.mod && orphan(m) && firstLineOf(m.point)===c.fl);
+      if(hit){
+        hit.module=modKey;
+        hit.point=point;
+        hit.recId=err.id; // 补回关联，之后编辑直接走 recId 快路径
+        hit.updatedAt=Date.now();
+        return;
+      }
+    }
     DB.mistakes.push({id:uid(),module:modKey,sub:err.sub||'',point,note:'',date:err.date||todayStr(),recId:err.id,updatedAt:Date.now()});
   }catch(e){ console.warn('syncErrorToMistakes',e); }
 }
@@ -2345,8 +2362,9 @@ async function saveErrorAsync(id, module, sub, date, desc, answer, point, audioT
   const photos = await ensurePhotosCloud(_errorPhotos);
   if(id){
     const e=DB.errors.find(x=>x.id===id);
+    const oldSnap={module:e.module, point:e.point}; // v2.2.32 保留编辑前内容，用于认领无 recId 的原考点
     Object.assign(e,{module,sub,date,desc,answer,point,audio,audioText,photos,updatedAt:Date.now()});
-    syncErrorToMistakes(e);
+    syncErrorToMistakes(e, oldSnap);
   }else{
     const ne={id:uid(),module,sub,date,desc,answer,point,audio,audioText,photos,updatedAt:Date.now()};
     DB.errors.push(ne);
@@ -4762,7 +4780,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.31 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.32 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
@@ -4907,7 +4925,7 @@ function importMistakesFromErrors(){
       }
       // 复习提醒拼进易错知识点（与错题原文格式一致：知识点\n复习提醒：xxx）
       const fullPoint=[point,reviewPart].filter(Boolean).join('\n');
-      DB.mistakes.push({id:uid(),module:e.module,sub:e.sub||'',point:fullPoint,date:e.date||todayStr(),note:'来自错题导入',updatedAt:Date.now()});
+      DB.mistakes.push({id:uid(),module:e.module,sub:e.sub||'',point:fullPoint,date:e.date||todayStr(),note:'来自错题导入',recId:e.id,updatedAt:Date.now()});
       added++;
     });
   });
