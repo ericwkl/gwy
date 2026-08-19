@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.30</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.31</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -4762,7 +4762,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.30 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.31 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
@@ -5312,11 +5312,46 @@ function parseShenlunContent(records){
   let curTopic='';
   let curSections={}; // {type: [texts]}
   let curType='观点'; // 当前子分类：显式记录"最近遇到的子分类标题"，避免 Object.keys 顺序(首次插入序)误导
+  // 3级结构支持（方法论章节）：一个话题下含多个隐式子话题（系统思维/问题导向/调查研究/干事创业），
+  // 每个子话题是"开篇金句…行动号召"的完整循环，靠同名子分类标题重复出现隐式分隔（原文无显式子话题标题行）。
+  let splitMode=false;          // 当前话题是否需要按循环切分为多个子话题
+  let subTopics=[];             // 收集到的子话题 {topic, sections}
+  let subIdx=0;                 // 当前子话题序号
+  let seenTypes=new Set();      // 当前子话题内已出现的子分类（用于检测循环重复）
+  const SUB_NAMES=['（一）系统思维','（二）问题导向','（三）调查研究','（四）干事创业']; // 方法论4个子话题标准名
   const flushTopic=()=>{
-    if(Object.values(curSections).some(a=>a&&a.length)){
+    if(splitMode){
+      // 先把当前未闭合的子话题收尾
+      if(Object.values(curSections).some(a=>a&&a.length)){
+        const name=SUB_NAMES[subIdx]||('方法论（'+(subIdx+1)+'）');
+        subTopics.push({topic:name, sections:curSections});
+      }
+      subTopics.forEach(st=>results.push(st));
+      subTopics=[]; subIdx=0; seenTypes=new Set();
+    }else if(Object.values(curSections).some(a=>a&&a.length)){
       results.push({topic:curTopic||'未分类', sections:curSections});
     }
     curTopic=''; curSections={}; curType='观点';
+  };
+  // 开启新话题（同时判断是否进入"按循环切分子话题"模式）
+  const startTopic=(line)=>{
+    flushTopic();
+    curTopic=line; curSections={}; curType='观点';
+    splitMode=/方法论/.test(line);
+    if(splitMode){ subTopics=[]; subIdx=0; seenTypes=new Set(); }
+  };
+  // 遇到子分类标题：splitMode 下检测循环重复→切分新子话题
+  const beginType=(t)=>{
+    if(splitMode){
+      if(seenTypes.has(t) && subIdx<SUB_NAMES.length){
+        const name=SUB_NAMES[subIdx]||('方法论（'+(subIdx+1)+'）');
+        subTopics.push({topic:name, sections:curSections});
+        subIdx++;
+        curSections={}; seenTypes=new Set();
+      }
+      seenTypes.add(t);
+    }
+    curType=t; curSections[t]=curSections[t]||[];
   };
   records.forEach(k=>{
     const txt=(k.content||'');
@@ -5326,17 +5361,14 @@ function parseShenlunContent(records){
       // 1) 子分类标题（独立行，可带【】或冒号）："开篇金句"、"点明观点："、"【金句】"
       const subTitle=line.match(new RegExp(`^[【\\[]?(${subTypeRe})[】\\]]?[:：]?$`));
       if(subTitle){
-        curType=subTitle[1];
-        curSections[curType]=curSections[curType]||[];
+        beginType(subTitle[1]);
         continue;
       }
       // 1.5) 编号+子分类标题："（一）开篇金句"、"1. 金句"（视为子分类而非话题）
       const numberedSub=line.match(new RegExp(`^[（(][一二三四五六七八九十\\d]+[）)]\\s*(${subTypeRe})[：:]?$`))||
                         line.match(new RegExp(`^\\d+[.、]\\s*(${subTypeRe})[：:]?$`));
       if(numberedSub){
-        const t=numberedSub[1];
-        curType=t;
-        curSections[t]=curSections[t]||[];
+        beginType(numberedSub[1]);
         continue;
       }
       // 2) 话题标题：仅识别（一）（二）…、1. 2. 等编号标题（含冒号的编号行视为内容而非话题）
@@ -5345,9 +5377,7 @@ function parseShenlunContent(records){
         /^\d+[\.、]/.test(line)
       );
       if(isTopic){
-        flushTopic();
-        curTopic=line;
-        curSections={}; curType='观点';
+        startTopic(line);
         continue;
       }
       // 3) 大目录标题（跳过）
@@ -5356,9 +5386,7 @@ function parseShenlunContent(records){
       if(/^用途[：:]/.test(line)) continue;
       // 5) 一级目录即话题标题："一、乡村振兴"（短行，像目录）
       if(/^[一二三四五六七八九十]+[、，]/.test(line)&&line.length<=20){
-        flushTopic();
-        curTopic=line;
-        curSections={}; curType='观点';
+        startTopic(line);
         continue;
       }
       // 6) 普通内容：归到当前子分类（curType = 最近遇到的子分类标题）
@@ -5430,13 +5458,19 @@ function parseXiaoTi(records){
         if(!result[key]) result[key]=[];
         // v2.2.28 矛盾范畴成对合并：仅"矛盾/范畴"分类中，"物质—精神"式对子开启新条目、其后说明行追加到该条目；
         // 其他分类（规范表达/对策积累）每行独立
-        const isPair=/^[^，。；：的而是和与对为\u2014\u2013\-]{2,20}[\u2014\u2013\-一][^，。；：的而是和与对为\u2014\u2013\-]{2,20}$/.test(line);
-        if(isPair){
-          result[key].push(line);
-        }else if(/矛盾|范畴/.test(curCat) && result[key].length){
+        // 万能思维体系：标题行（以"）"结尾，如"XX（实务维度——主体）"）与其后的"eg."内容行是同一词条，
+        // 合并到同一条，避免随机抽取时标题与内容被拆散显示。
+        if(/万能思维体系/.test(key) && /^eg[.：]/.test(line) && result[key].length && /）\s*$/.test(result[key][result[key].length-1])){
           result[key][result[key].length-1]+='\n'+line;
         }else{
-          result[key].push(line);
+          const isPair=/^[^，。；：的而是和与对为\u2014\u2013\-]{2,20}[\u2014\u2013\-一][^，。；：的而是和与对为\u2014\u2013\-]{2,20}$/.test(line);
+          if(isPair){
+            result[key].push(line);
+          }else if(/矛盾|范畴/.test(curCat) && result[key].length){
+            result[key][result[key].length-1]+='\n'+line;
+          }else{
+            result[key].push(line);
+          }
         }
       }
     }
