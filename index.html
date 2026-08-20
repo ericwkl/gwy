@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.34</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.35</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -4095,11 +4095,19 @@ function extractYyWords(kbItems){
       if(/积累$/.test(word)||/^(高频|易混|生词|词语|词汇|近义|反义|辨析|素材|笔记|总结)$/.test(word)) continue;
       if(!seen.has(word)){ seen.add(word); words.push('【'+word+'】'+body.slice(0,120)); }
     }
-    const re2=/(?:^|\n)[【]?([^】\n：、，]{2,15})[】]?[:：]\s*([^\n]{2,150})/g;
-    while((m=re2.exec(txt))){
+    // 短词条（词名 2~8 字）：加【】，如"始终不渝：释义"（成语/词语通常为 2-5 字）
+    const re2a=/(?:^|\n)[【]?([^】\n：、，]{2,8})[】]?[:：]\s*([^\n]{2,150})/g;
+    while((m=re2a.exec(txt))){
       const word=m[1], body=m[2].trim();
       if(/积累$/.test(word)||/^(高频|易混|生词|词语|词汇|近义|反义|辨析)$/.test(word)) continue;
       if(!seen.has(word)){ seen.add(word); words.push('【'+word+'】'+body.slice(0,120)); }
+    }
+    // 长句（词名 >8 字，多为某词条的例句/长内容，如"梳理百年党史让人留下深刻记忆：…"）：
+    // 原样保留、不再误加【】当独立词条
+    const re2b=/(?:^|\n)([^】\n：、，]{9,40})[:：]\s*([^\n]{2,150})/g;
+    while((m=re2b.exec(txt))){
+      const whole=m[0].trim();
+      if(!seen.has(whole)){ seen.add(whole); words.push(whole.slice(0,160)); }
     }
     /* 独立行词条（高频词等）：词单独一行，后续行为释义行与（来源）例句行。
        词名取独立行本身（修复旧兜底把下一行短词当词名的错位，如"引擎"被提取成"发动机"）；
@@ -4185,8 +4193,10 @@ async function renderAccu(){
       if(!liveNews) liveNews=await fetchLiveNews(false);
       const hasLive=liveNews.gov.length||liveNews.gd.length;
       let newsSections='';
-      if(hasLive){
-        let gdList=liveNews.gd.slice(0,3);
+        if(hasLive){
+        // v2.2.35：广东要闻只保留广东本地新闻，过滤掉广东省政府网转载的全国/中央时政
+        const isGuangdongNews=t=>!/国务院全体会议|国务院常务会议|国务院.*会议|国务院总理|国务院新闻|中共中央政治局|中央财经委员会|全国人大常委会|全国政协|中央书记处|中央军委/.test(t)||/广东|粤|大湾区|省委|省政府|黄坤明|孟凡利|广州|深圳|珠海|佛山|东莞|汕头|韶关|湛江|惠州|潮州|汕头/.test(t);
+        let gdList=liveNews.gd.filter(n=>isGuangdongNews(n.title)).slice(0,3);
         if(!gdList.length){
           const gdPool=SZ_HOT_POOL.filter(h=>h.isGD);
           gdList=seededShuffle(gdPool,seed+1).slice(0,2).map(h=>({title:h.title,url:h.url||''}));
@@ -4788,7 +4798,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.34 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.35 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
