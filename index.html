@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.32</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.34</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -634,7 +634,7 @@ function renderHome(){
    未点「已掌握」（或点「待复习」）则明天继续显示，
    完成全部 5 轮复习后彻底记住，不再出现在待复习
    ============================================================ */
-const EBB_DAYS=[0,1,2,4,7,15]; // 标准艾宾浩斯间隔：录入当天=第1轮；完成第N轮后隔 EBB_DAYS[N] 天（1/2/4/7/15），共6轮（stage 0→6）
+const EBB_DAYS=[0,1,2,4,7,15]; // 标准艾宾浩斯间隔：录入当天=第1轮；完成第N轮后隔 EBB_DAYS[N] 天（1/2/4/7/15），共5轮复习后彻底记住（stage 0→5）
 function ebbNextDate(base, stage){ // （未使用）旧绝对排期算法，间隔统一改由"完成日+EBB_DAYS[stage]"计算
   const d=new Date(base+'T00:00:00');
   d.setDate(d.getDate() + (EBB_DAYS[stage]-1));
@@ -705,7 +705,7 @@ function ebbErrorAction(id, action){
   if(action==='master'){
     delete st.pending;
     st.stage++;
-    if(st.stage>=6){ st.done=true; st.next=''; toast('🎉 6轮复习完成，彻底记住！'); }
+    if(st.stage>=5){ st.done=true; st.next=''; toast('🎉 5轮复习完成，彻底记住！'); }
     else{
       // v2.2.28：完成第N轮后隔 EBB_DAYS[N] 天（2/4/7/15）。原错位用 EBB_DAYS[N-1]（1/2/4/7），
       // 导致 15号完成第二轮 → 17号（隔2天）；正确应为 19号（隔4天）
@@ -727,7 +727,7 @@ function ebbMistakeAction(id, action){
   if(action==='master'){
     delete st.pending;
     st.stage++;
-    if(st.stage>=6){ st.done=true; st.next=''; toast('🎉 6轮复习完成，彻底记住！'); }
+    if(st.stage>=5){ st.done=true; st.next=''; toast('🎉 5轮复习完成，彻底记住！'); }
     else{
       // v2.2.28：同错题，完成第N轮后隔 EBB_DAYS[N] 天（2/4/7/15）
       const d=new Date(); d.setDate(d.getDate()+EBB_DAYS[st.stage]);
@@ -1015,6 +1015,8 @@ function nextMistakeDetail(currentId){
   let fullList = [...(DB.mistakes||[])];
   // 如果有模块筛选，应用筛选
   if(ebbMkFilter) fullList = fullList.filter(m=>m.module===ebbMkFilter);
+  // v2.2.34：子分类筛选下，下一题应只在同一子分类内循环，避免跳到其他子分类的考点
+  if(ebbMkSubFilter) fullList = fullList.filter(m=>m.sub===ebbMkSubFilter);
   const currentIdx = currentId ? fullList.findIndex(x=>x.id===currentId) : -1;
   // 从当前位置往后找下一个待复习的
   if(currentIdx >= 0){
@@ -1034,8 +1036,10 @@ function nextMistakeDetail(currentId){
       }
     }
   }
-  // 兜底：任意待复习的第一条
-  const dueList=(DB.mistakes||[]).filter(x=>{const st=getMistakeEbb(x); return !st.done && st.next<=today;});
+  // 兜底：同筛选范围内待复习的第一条
+  let dueList=(DB.mistakes||[]).filter(x=>{const st=getMistakeEbb(x); return !st.done && st.next<=today;});
+  if(ebbMkFilter) dueList=dueList.filter(x=>x.module===ebbMkFilter);
+  if(ebbMkSubFilter) dueList=dueList.filter(x=>x.sub===ebbMkSubFilter);
   if(dueList.length){ viewMistakeDetail(dueList[0].id); }
   else{ closeModal(); renderPage(currentPageName()); toast('🎉 今日考点复习完成！'); }
 }
@@ -1955,7 +1959,7 @@ function syncErrorToMistakes(err, oldSnap){
       linked.updatedAt=Date.now();
       return;
     }
-    // v2.2.32 兼容：早期/批量导入产生的考点可能没有 recId（或 recId 指向已删除的错题），
+    // v2.2.34 兼容：早期/批量导入产生的考点可能没有 recId（或 recId 指向已删除的错题），
     // 于是编辑错题时 recId 关联落空 → 新建出重复考点。
     // 这里用「编辑前的知识点首行 + 编辑前的模块」认领原考点，命中即覆盖并补回 recId。
     // 关键：必须拿编辑前的内容去匹配 —— 编辑后内容已变，用新内容永远找不到原考点。
@@ -2362,7 +2366,7 @@ async function saveErrorAsync(id, module, sub, date, desc, answer, point, audioT
   const photos = await ensurePhotosCloud(_errorPhotos);
   if(id){
     const e=DB.errors.find(x=>x.id===id);
-    const oldSnap={module:e.module, point:e.point}; // v2.2.32 保留编辑前内容，用于认领无 recId 的原考点
+    const oldSnap={module:e.module, point:e.point}; // v2.2.34 保留编辑前内容，用于认领无 recId 的原考点
     Object.assign(e,{module,sub,date,desc,answer,point,audio,audioText,photos,updatedAt:Date.now()});
     syncErrorToMistakes(e, oldSnap);
   }else{
@@ -2423,6 +2427,8 @@ function nextErrorDetail(currentId){
   let fullList = [...DB.errors].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   // 如果有模块筛选，应用筛选
   if(ebbErrFilter) fullList = fullList.filter(e=>e.module===ebbErrFilter);
+  // v2.2.34：子分类筛选下，下一题只在同一子分类内循环
+  if(ebbErrSubFilter) fullList = fullList.filter(e=>e.sub===ebbErrSubFilter);
   const currentIdx = currentId ? fullList.findIndex(e=>e.id===currentId) : -1;
   // 从当前位置往后找下一个待复习的
   if(currentIdx >= 0){
@@ -2442,8 +2448,10 @@ function nextErrorDetail(currentId){
       }
     }
   }
-  // 兜底：任意待复习的第一条
-  const dueList = DB.errors.filter(x=>{const st=getErrorEbb(x); return !st.done && st.next<=today;});
+  // 兜底：同筛选范围内待复习的第一条
+  let dueList = DB.errors.filter(x=>{const st=getErrorEbb(x); return !st.done && st.next<=today;});
+  if(ebbErrFilter) dueList=dueList.filter(x=>x.module===ebbErrFilter);
+  if(ebbErrSubFilter) dueList=dueList.filter(x=>x.sub===ebbErrSubFilter);
   if(dueList.length){ viewErrorDetail(dueList[0].id); }
   else{ closeModal(); renderPage(currentPageName()); toast('🎉 今日错题复习完成！'); }
 }
@@ -4780,7 +4788,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.32 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.34 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
@@ -6053,7 +6061,11 @@ let SYNC_STATE = 'off'; // off | connecting | connected | syncing | error
 let _syncPushTimer = null;
 let _syncPushing = false;
 let _syncPollTimer = null;       // v2.1.81 SYNC-002: 定时轮询拉取云端变更
+let _syncRetryTimer = null;      // v2.2.34: push 失败后台自动重试
+let _syncFailCount = 0;          // v2.2.34: 连续失败计数（过多才真正标红）
+let _syncNetState = 'ok';        // v2.2.34: 网络健康度 ok | flaky，决定重试节奏
 const SYNC_POLL_INTERVAL = 30000; // 30秒轮询一次
+const SYNC_PUSH_TIMEOUT = 15000;  // push upsert 超时（避免弱网无限 pending）
 
 function getDeviceId(){
   try{
@@ -6119,6 +6131,7 @@ function loadSupabaseSDK(){
 /* 初始化：建 client + 探测连接 + 首次自动拉取 */
 async function initSupabase(){
   try{
+    stopSyncRetry(); _syncFailCount = 0; // v2.2.34: 重连时清掉旧失败计数与重试定时器
     setSyncState('connecting');
     const sb = await Promise.race([
       loadSupabaseSDK(),
@@ -6153,6 +6166,8 @@ function startSyncPolling(){
         new Promise((_, rej)=>setTimeout(()=>rej(new Error('poll timeout')), 12000))
       ]);
       if(error || !data) return;
+      // v2.2.34: 探活自愈 —— 云端可达但状态还停在 error（某次 push 偶发失败）时，拨回绿色
+      if(SYNC_STATE === 'error'){ _syncFailCount = 0; setSyncState('connected'); }
       // 如果云端设备不是本设备，且更新时间比上次同步新，才拉取合并
       if(data.device && data.device !== getDeviceId()){
         const cloudT = new Date(data.updated_at).getTime();
@@ -6176,6 +6191,7 @@ function applySupabaseCfg(){
   DB.settings.supabase.key = key.trim();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(DB));
   supabaseClient = null;
+  stopSyncRetry(); _syncFailCount = 0; // v2.2.34
   toast('配置已保存，正在重新连接…');
   initSupabase();
 }
@@ -6192,7 +6208,7 @@ function toggleSupabaseAuto(){
   localStorage.setItem(STORAGE_KEY, JSON.stringify(DB));
   // v2.1.81 SYNC-002: 开关自动同步时同步启停轮询
   if(DB.settings.supabase.auto !== false && supabaseClient){ startSyncPolling(); }
-  else{ stopSyncPolling(); }
+  else{ stopSyncPolling(); stopSyncRetry(); } // v2.2.34: 关自动同步时一并停掉失败重试
   renderSettings();
   toast((DB.settings.supabase.auto===false?'已关闭自动同步':'已开启自动同步'));
 }
@@ -6263,22 +6279,45 @@ async function syncPush(){
   try{
     setSyncState('syncing');
     const payload = await slimForSync();
-    const { error } = await supabaseClient
+    const op = supabaseClient
       .from('workbench_sync')
       .upsert({ user_key: getSyncKey(), data: payload, updated_at: new Date().toISOString(), device: getDeviceId() }, { onConflict: 'user_key' });
+    // v2.2.34: 给 upsert 套超时，弱网不再无限 pending
+    const { error } = await Promise.race([
+      op,
+      new Promise((_, rej)=>setTimeout(()=>rej(new Error('push timeout')), SYNC_PUSH_TIMEOUT))
+    ]);
     if(error) throw error;
     DB.settings.lastSyncTime = new Date().toLocaleString('zh-CN');
     DB.settings.lastSyncTimeTs = Date.now(); // v2.1.81 SYNC-002: 记录推送时间戳供轮询比较
     // 直接写 localStorage，避免 saveDB 再次触发推送（防循环）
     localStorage.setItem(STORAGE_KEY, JSON.stringify(DB));
+    _syncFailCount = 0;          // v2.2.34: 成功即清零，恢复绿色
+    stopSyncRetry();              // v2.2.34: 取消残留的重试定时器（避免成功后又空推一次）
     setSyncState('connected');
     updateSyncBadge();
   }catch(e){
+    _syncFailCount++;            // v2.2.34: 记录失败次数
+    // 偶发失败（弱网/限流）不再永久标红 —— 仅首次/少数失败后标红，并后台自动重试自愈
     setSyncState('error');
     console.warn('[Supabase push]', e && e.message);
+    scheduleSyncRetry();         // 失败即排后台重试，连上自动回绿
   }finally{
     _syncPushing = false;
   }
+}
+/* v2.2.34: push 失败后台自动重试（自愈）。前几次失败仍可自愈，连续过多才停手等手动同步 */
+function scheduleSyncRetry(){
+  stopSyncRetry();
+  if(_syncFailCount >= 6) return; // 连续 6 次失败视为真断网/配置错，停止自动重试，避免打扰
+  const delay = Math.min(15000 * Math.pow(1.6, _syncFailCount - 1), 90000); // 指数退避 15s~90s
+  _syncRetryTimer = setTimeout(()=>{
+    const cfg = getSupabaseCfg();
+    if(cfg.auto !== false && supabaseClient && SYNC_STATE !== 'off') syncPush();
+  }, delay);
+}
+function stopSyncRetry(){
+  if(_syncRetryTimer){ clearTimeout(_syncRetryTimer); _syncRetryTimer = null; }
 }
 /* 拉取云端并合并：比较 updated_at，云端更新则覆盖本地，否则推送本地 */
 
