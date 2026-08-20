@@ -129,6 +129,7 @@ img{max-width:100%;display:block;}
 .exam-item .days{font-size:17px;font-weight:800;color:var(--primary);line-height:1;}
 .exam-item .days-label{font-size:9px;color:var(--text-soft);}
 .exam-item .del{margin-left:6px;color:var(--text-light);font-size:15px;}
+.exam-item .edit{margin-left:6px;color:var(--text-soft);font-size:15px;}
 .exam-item.urgent{border-left-color:var(--danger);}
 .exam-item.urgent .days{color:var(--danger);}
 
@@ -304,7 +305,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.35</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.36</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -580,6 +581,7 @@ function renderHome(){
         return `<div class="exam-item ${urgent?'urgent':''}">
           <div class="info"><div class="name">${e.name}</div><div class="date">${e.date}</div></div>
           <div class="count"><div class="days">${days}</div><div class="days-label">天</div></div>
+          <button class="edit" onclick="examModal('${e.id}')" title="修改日期">✎</button>
           <button class="del" onclick="delExam('${e.id}')">✕</button>
         </div>`;
       }).join('')}
@@ -1617,19 +1619,22 @@ function closeImgViewer(){
 /* ============================================================
    倒计时
    ============================================================ */
-function examModal(){
-  openModal(`<div class="modal-head"><h3>新增考试倒计时</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
-    <div class="form-group"><label>考试名称</label><input id="ex_name" placeholder="如：2026国考"></div>
-    <div class="form-group"><label>考试日期</label><input type="date" id="ex_date"></div>
+function examModal(id){
+  const e = id ? DB.exams.find(x=>x.id===id) : null;
+  openModal(`<div class="modal-head"><h3>${id?'编辑考试倒计时':'新增考试倒计时'}</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="form-group"><label>考试名称</label><input id="ex_name" value="${e?escapeHtml(e.name):''}" placeholder="如：2026国考"></div>
+    <div class="form-group"><label>考试日期</label><input type="date" id="ex_date" value="${e?e.date:''}"></div>
     <div class="modal-foot"><button class="btn btn-outline" style="flex:1" onclick="closeModal()">取消</button>
-    <button class="btn" style="flex:1" onclick="saveExam()">保存</button></div>`);
+    <button class="btn" style="flex:1" onclick="saveExam('${id||''}')">保存</button></div>`);
 }
-function saveExam(){
+function saveExam(id){
   const name=document.getElementById('ex_name').value.trim();
   const date=document.getElementById('ex_date').value;
   if(!name||!date){ toast('请填写完整'); return; }
-  DB.exams.push({id:uid(),name,date,updatedAt:Date.now()});
-  saveDB(); closeModal(); renderHome(); toast('已添加');
+  const e = id ? DB.exams.find(x=>x.id===id) : null;
+  if(e){ e.name=name; e.date=date; e.updatedAt=Date.now(); }
+  else{ DB.exams.push({id:uid(),name,date,updatedAt:Date.now()}); }
+  saveDB(); closeModal(); renderHome(); toast(e?'已更新':'已添加');
 }
 function delExam(id){
   if(!confirm('删除此考试？')) return;
@@ -4798,7 +4803,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.35 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.36 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
@@ -6075,7 +6080,7 @@ let _syncRetryTimer = null;      // v2.2.34: push 失败后台自动重试
 let _syncFailCount = 0;          // v2.2.34: 连续失败计数（过多才真正标红）
 let _syncNetState = 'ok';        // v2.2.34: 网络健康度 ok | flaky，决定重试节奏
 const SYNC_POLL_INTERVAL = 30000; // 30秒轮询一次
-const SYNC_PUSH_TIMEOUT = 15000;  // push upsert 超时（避免弱网无限 pending）
+const SYNC_PUSH_TIMEOUT = 45000;  // push upsert 超时（弱网平板往返可能 20-40s，给足余量避免误判断开）
 
 function getDeviceId(){
   try{
@@ -6173,7 +6178,7 @@ function startSyncPolling(){
           .select('updated_at,device')
           .eq('user_key', getSyncKey())
           .maybeSingle(),
-        new Promise((_, rej)=>setTimeout(()=>rej(new Error('poll timeout')), 12000))
+        new Promise((_, rej)=>setTimeout(()=>rej(new Error('poll timeout')), 30000))
       ]);
       if(error || !data) return;
       // v2.2.34: 探活自愈 —— 云端可达但状态还停在 error（某次 push 偶发失败）时，拨回绿色
@@ -6309,7 +6314,8 @@ async function syncPush(){
   }catch(e){
     _syncFailCount++;            // v2.2.34: 记录失败次数
     // 偶发失败（弱网/限流）不再永久标红 —— 仅首次/少数失败后标红，并后台自动重试自愈
-    setSyncState('error');
+    // 弱网偶发超时：第1次失败先保持黄色"同步中"不标红，避免用户误判"频繁断"；连续失败才标红
+    setSyncState(_syncFailCount <= 1 ? 'syncing' : 'error');
     console.warn('[Supabase push]', e && e.message);
     scheduleSyncRetry();         // 失败即排后台重试，连上自动回绿
   }finally{
@@ -6588,11 +6594,12 @@ async function _syncPullAndMergeInner(){
 /* 同步拉取+合并（带 15s 超时兜底）：手机网络到 supabase.co 挂起时不再永远停在"同步中"，
    超时后标记未连接并提示，数据仍在本地不丢 */
 async function syncPullAndMerge(){
-  const timer = new Promise((_, rej)=>setTimeout(()=>rej(new Error('sync timeout')), 15000));
+  const timer = new Promise((_, rej)=>setTimeout(()=>rej(new Error('sync timeout')), 30000));
   try{
     await Promise.race([_syncPullAndMergeInner(), timer]);
   }catch(e){
-    setSyncState('error');
+    // pull 超时：不立即升级为红色（探活自愈会在网络恢复时拨回绿）；仅当已红才保持红
+    if(SYNC_STATE !== 'error') setSyncState('syncing');
     console.warn('[Supabase sync]', e && e.message);
     if(/timeout/i.test(String(e && e.message))) toast('同步超时：网络连接不上云端，已断开，稍后会重试');
   }
