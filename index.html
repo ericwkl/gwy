@@ -305,7 +305,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.36</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.38</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -350,7 +350,7 @@ const MODULES = [
   {key:'zzll', name:'政治理论', icon:'🏛️', subs:[], group:'xc'},
   {key:'cs',   name:'常识判断', icon:'🌐', subs:[], group:'xc'},
   {key:'yy',   name:'言语理解', icon:'💬', subs:['逻辑填空','片段阅读','语句表达'], group:'xc'},
-  {key:'pd',   name:'判断推理', icon:'🧩', subs:['图形推理','定义判断','类比推理','逻辑推理','科学推理'], group:'xc'},
+  {key:'pd',   name:'判断推理', icon:'🧩', subs:['图形推理','定义判断','类比推理','逻辑判断','科学推理'], group:'xc'},
   {key:'sl',   name:'数量关系', icon:'🔢', subs:['数字推理','数学运算'], group:'xc'},
   {key:'zl',   name:'资料分析', icon:'📈', subs:[], group:'xc'},
   {key:'sl2',  name:'申论',     icon:'✍️', subs:[], group:'sy'},
@@ -1013,37 +1013,24 @@ function backFromMistakeDetail(){
 /* 已掌握/待复习后 → 自动打开下一条待复习考点（跳到当前题的下一题，不回第一条） */
 function nextMistakeDetail(currentId){
   const today=todayStr();
-  // 用完整列表找当前位置（当前题已被标记掌握，不在待复习列表中了）
-  let fullList = [...(DB.mistakes||[])];
-  // 如果有模块筛选，应用筛选
-  if(ebbMkFilter) fullList = fullList.filter(m=>m.module===ebbMkFilter);
-  // v2.2.34：子分类筛选下，下一题应只在同一子分类内循环，避免跳到其他子分类的考点
-  if(ebbMkSubFilter) fullList = fullList.filter(m=>m.sub===ebbMkSubFilter);
-  const currentIdx = currentId ? fullList.findIndex(x=>x.id===currentId) : -1;
-  // 从当前位置往后找下一个待复习的
-  if(currentIdx >= 0){
-    for(let i = currentIdx + 1; i < fullList.length; i++){
-      const st = getMistakeEbb(fullList[i]);
-      if(!st.done && st.next <= today){
-        viewMistakeDetail(fullList[i].id);
-        return;
-      }
-    }
-    // 往后没找到，从头绕回找
-    for(let i = 0; i < currentIdx; i++){
-      const st = getMistakeEbb(fullList[i]);
-      if(!st.done && st.next <= today){
-        viewMistakeDetail(fullList[i].id);
-        return;
-      }
-    }
+  const cur = currentId ? (DB.mistakes||[]).find(x=>x.id===currentId) : null;
+  const curSub = (cur&&cur.sub)||'';
+  // 候选列表优先级：显式子分类筛选 > 当前条目子分类 > 全列表
+  // 未显式选子分类筛选时，优先在同子分类内循环，避免点"已掌握"后乱跳到其他子分类（如逻辑题跳资料分析）
+  const base=()=>{ let l=[...(DB.mistakes||[])]; if(ebbMkFilter) l=l.filter(m=>m.module===ebbMkFilter); return l; };
+  const candidates=[];
+  if(ebbMkSubFilter) candidates.push(base().filter(m=>m.sub===ebbMkSubFilter));
+  else if(curSub) candidates.push(base().filter(m=>m.sub===curSub));
+  if(!ebbMkSubFilter) candidates.push(base()); // 同子分类做完再回退全列表（不提前关闭）
+  for(const list of candidates){
+    const idx=currentId?list.findIndex(x=>x.id===currentId):-1;
+    if(idx<0) continue;
+    let found=null;
+    for(let i=idx+1;i<list.length;i++){ const st=getMistakeEbb(list[i]); if(!st.done&&st.next<=today){found=list[i];break;} }
+    if(!found){ for(let i=0;i<idx;i++){ const st=getMistakeEbb(list[i]); if(!st.done&&st.next<=today){found=list[i];break;} } }
+    if(found){ viewMistakeDetail(found.id); return; }
   }
-  // 兜底：同筛选范围内待复习的第一条
-  let dueList=(DB.mistakes||[]).filter(x=>{const st=getMistakeEbb(x); return !st.done && st.next<=today;});
-  if(ebbMkFilter) dueList=dueList.filter(x=>x.module===ebbMkFilter);
-  if(ebbMkSubFilter) dueList=dueList.filter(x=>x.sub===ebbMkSubFilter);
-  if(dueList.length){ viewMistakeDetail(dueList[0].id); }
-  else{ closeModal(); renderPage(currentPageName()); toast('🎉 今日考点复习完成！'); }
+  closeModal(); renderPage(currentPageName()); toast('🎉 今日考点复习完成！');
 }
 function delMistakeFromDetail(id){
   if(!confirm('删除此考点？')) return;
@@ -2428,37 +2415,23 @@ function viewErrorDetail(id){
 /* 错题已掌握/待复习后 → 自动打开下一条待复习错题（跳到当前题的下一题，不回第一条） */
 function nextErrorDetail(currentId){
   const today=todayStr();
-  // 用完整列表找当前位置（当前题已被标记掌握，不在待复习列表中了）
-  let fullList = [...DB.errors].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
-  // 如果有模块筛选，应用筛选
-  if(ebbErrFilter) fullList = fullList.filter(e=>e.module===ebbErrFilter);
-  // v2.2.34：子分类筛选下，下一题只在同一子分类内循环
-  if(ebbErrSubFilter) fullList = fullList.filter(e=>e.sub===ebbErrSubFilter);
-  const currentIdx = currentId ? fullList.findIndex(e=>e.id===currentId) : -1;
-  // 从当前位置往后找下一个待复习的
-  if(currentIdx >= 0){
-    for(let i = currentIdx + 1; i < fullList.length; i++){
-      const st = getErrorEbb(fullList[i]);
-      if(!st.done && st.next <= today){
-        viewErrorDetail(fullList[i].id);
-        return;
-      }
-    }
-    // 往后没找到，从头绕回找
-    for(let i = 0; i < currentIdx; i++){
-      const st = getErrorEbb(fullList[i]);
-      if(!st.done && st.next <= today){
-        viewErrorDetail(fullList[i].id);
-        return;
-      }
-    }
+  const cur = currentId ? (DB.errors||[]).find(x=>x.id===currentId) : null;
+  const curSub = (cur&&cur.sub)||'';
+  // 候选列表优先级：显式子分类筛选 > 当前条目子分类 > 全列表
+  const base=()=>{ let l=[...(DB.errors||[])].sort((a,b)=>(b.date||'').localeCompare(a.date||'')); if(ebbErrFilter) l=l.filter(e=>e.module===ebbErrFilter); return l; };
+  const candidates=[];
+  if(ebbErrSubFilter) candidates.push(base().filter(e=>e.sub===ebbErrSubFilter));
+  else if(curSub) candidates.push(base().filter(e=>e.sub===curSub));
+  if(!ebbErrSubFilter) candidates.push(base());
+  for(const list of candidates){
+    const idx=currentId?list.findIndex(x=>x.id===currentId):-1;
+    if(idx<0) continue;
+    let found=null;
+    for(let i=idx+1;i<list.length;i++){ const st=getErrorEbb(list[i]); if(!st.done&&st.next<=today){found=list[i];break;} }
+    if(!found){ for(let i=0;i<idx;i++){ const st=getErrorEbb(list[i]); if(!st.done&&st.next<=today){found=list[i];break;} } }
+    if(found){ viewErrorDetail(found.id); return; }
   }
-  // 兜底：同筛选范围内待复习的第一条
-  let dueList = DB.errors.filter(x=>{const st=getErrorEbb(x); return !st.done && st.next<=today;});
-  if(ebbErrFilter) dueList=dueList.filter(x=>x.module===ebbErrFilter);
-  if(ebbErrSubFilter) dueList=dueList.filter(x=>x.sub===ebbErrSubFilter);
-  if(dueList.length){ viewErrorDetail(dueList[0].id); }
-  else{ closeModal(); renderPage(currentPageName()); toast('🎉 今日错题复习完成！'); }
+  closeModal(); renderPage(currentPageName()); toast('🎉 今日错题复习完成！');
 }
 /* 从错题详情返回：如果是从列表进入的，回到对应列表（而不是退出到页面） */
 let _detailReturnFn=null;
@@ -2518,9 +2491,9 @@ async function importErrorExcel(input){
       modMap[m.name]=m.key;
       (m.subs||[]).forEach(s=>{ modMap[s]=m.key; });
     });
-    // 模块列名 → 子模块名 别名映射（如用户写"逻辑判断"实际想归到子模块"逻辑推理"）
+    // 模块列名 → 子模块名 别名映射（v2.2.38：子模块已统一为"逻辑判断"，旧名"逻辑推理"→新名"逻辑判断"）
     const SUB_ALIAS={
-      '逻辑判断':'逻辑推理',
+      '逻辑推理':'逻辑判断',
     };
     // 尝试提取xlsx中的嵌入图片（按sheet分组）+ WPS cellimages顺序图片
     const sheetImages=await extractXlsxImages(arrayBuffer, wb.SheetNames).catch(()=>{
@@ -2569,7 +2542,7 @@ async function importErrorExcel(input){
           }
         }
         if(!moduleKey) moduleKey='pd'; // 默认判断推理
-        // 别名映射（如"逻辑判断"→"逻辑推理"）
+        // 别名映射（v2.2.38：旧"逻辑推理"→新"逻辑判断"）
         if(moduleKey==='pd' && !sub && modName && SUB_ALIAS[modName]){
           sub = SUB_ALIAS[modName];
         }
@@ -4207,7 +4180,7 @@ async function renderAccu(){
           gdList=seededShuffle(gdPool,seed+1).slice(0,2).map(h=>({title:h.title,url:h.url||''}));
         }
         if(gdList.length){
-          newsSections+=`<details open style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--primary);cursor:pointer;padding:4px 0;">广东要闻</summary><div>${gdList.map(n=>`<div style="padding:3px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);">${linkify('· '+n.title+(n.url?'\n  '+n.url:''))}</div>`).join('')}</div></details>`;
+          newsSections+=`<details open style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--primary);cursor:pointer;padding:4px 0;">广东要闻</summary><div>${gdList.map(n=>`<div style="padding:3px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);white-space:pre-wrap;word-break:break-all;">${linkify('· '+n.title+(n.url?'\n  '+n.url:''))}</div>`).join('')}</div></details>`;
         }
         const govList=liveNews.gov.filter(n=>!liveNews.gd.some(g=>g.title===n.title)).slice(0,6);
         if(govList.length){
@@ -4215,7 +4188,7 @@ async function renderAccu(){
             let line='· '+(n.date?'['+n.date.slice(5)+'] ':'')+n.title;
             if(n.url) line+='\n  '+n.url;
             if(n.digest) line+='\n  '+n.digest;
-            return `<div style="padding:3px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);">${linkify(line)}</div>`;
+            return `<div style="padding:3px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);white-space:pre-wrap;word-break:break-all;">${linkify(line)}</div>`;
           }).join('')}</div></details>`;
         }
         cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span class="section-tag">${fmtNewsTime(liveNews.t)||'实时'}</span></div>${newsSections}</div>`;
@@ -4224,7 +4197,7 @@ async function renderAccu(){
         const gdPool=SZ_HOT_POOL.filter(h=>h.isGD);
         const otherPool=SZ_HOT_POOL.filter(h=>!h.isGD);
         const hot=[...seededShuffle(gdPool,seed+1).slice(0,2), ...seededShuffle(otherPool,seed+2).slice(0,4)];
-        newsSections=`<details open style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--primary);cursor:pointer;padding:4px 0;">近期热点</summary><div>${hot.map(h=>`<div style="padding:3px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);">${linkify('· ['+h.date+'] '+h.title+(h.url?'\n  '+h.url:''))}</div>`).join('')}</div></details>`;
+        newsSections=`<details open style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--primary);cursor:pointer;padding:4px 0;">近期热点</summary><div>${hot.map(h=>`<div style="padding:3px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);white-space:pre-wrap;word-break:break-all;">${linkify('· ['+h.date+'] '+h.title+(h.url?'\n  '+h.url:''))}</div>`).join('')}</div></details>`;
         cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span class="section-tag">近期</span></div>${newsSections}</div>`;
       }
       // 也显示KB中的时政条目（如果有），逐行解析同常识/政治理论
@@ -4306,18 +4279,31 @@ async function renderAccu(){
       const slItems=items.filter(k=>!/小题/.test(k.cat||''));
       const topics=parseShenlunContent(slItems);
       if(topics.length){
-        const picked=seededShuffle(topics,seed+30).slice(0,1);
+        // v2.2.38：3 级结构 — 大话题下选一个子话题（如"高质量发展"），section-tag 显示子话题名；下面所有有内容的子分类都展示
+        // 旧版只有 2 级（topic→子分类），section-tag=topic 名，用户反馈"就显示一个大标题"
+        // 新版飞书文档有"### 一、经济建设 →（一）高质量发展→开篇金句"3 级
+        const grandTopics=[]; // [{grand:'一、经济建设', sub:'高质量发展', sections:{开篇金句:[...]}}]
+        for(const t of topics){
+          if(t.subTopics && t.subTopics.length){
+            for(const st of t.subTopics){
+              grandTopics.push({grand:t.topic, sub:st.topic, sections:st.sections});
+            }
+          }else{
+            grandTopics.push({grand:t.topic, sub:'', sections:t.sections});
+          }
+        }
+        const picked=seededShuffle(grandTopics,seed+30).slice(0,1);
         for(const t of picked){
           let sectionHtml='';
           for(const [type,arr] of Object.entries(t.sections)){
             if(!arr||!arr.length) continue;
-            // 案例类：过滤纯空案例，有内容的清理结尾空"→可论证："后保留
             const filtered=(type==='案例举证'||type==='案例')?arr.filter(x=>isCaseValid(x)).map(x=>cleanCaseTail(x)):arr;
             if(!filtered.length) continue;
-            const p2=seededShuffle(filtered,seed+31).slice(0,2);
-            sectionHtml+=`<details open style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--text);cursor:pointer;padding:4px 0;">${escapeHtml(type)}</summary><div style="padding:4px 0 6px;">${p2.map(x=>`<div style="font-size:12px;color:var(--text);line-height:1.7;padding:2px 0;">${escapeHtml(x)}</div>`).join('')}</div></details>`;
+            const p2=seededShuffle(filtered,seed+31+'_'+type).slice(0,2);
+            sectionHtml+=`<details open style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--text);cursor:pointer;padding:4px 0;">${escapeHtml(type)}</summary><div style="padding:4px 0 6px;">${p2.map(x=>`<div style="font-size:12px;color:var(--text);line-height:1.7;padding:2px 0;white-space:pre-wrap;word-break:break-word;">${escapeHtml(x)}</div>`).join('')}</div></details>`;
           }
-          cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span class="section-tag">${escapeHtml(t.topic||'')}</span></div>${sectionHtml}</div>`;
+          const tagText=t.sub||t.grand||'';
+          cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}<span style="font-size:11px;color:var(--text-light);font-weight:normal;margin-left:4px;">${escapeHtml(t.grand||'')}</span></span><span class="section-tag" title="${escapeHtml(t.grand||'')}">${escapeHtml(tagText)}</span></div>${sectionHtml}</div>`;
         }
       }
       const xtItems=items.filter(k=>/小题/.test(k.cat||''));
@@ -4402,7 +4388,7 @@ async function renderAccu(){
         let line='· '+(n.date?'['+n.date.slice(5)+'] ':'')+n.title;
         if(n.url) line+='\n  '+n.url;
         if(n.digest) line+='\n  '+n.digest;
-        return `<div style="padding:3px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);">${linkify(line)}</div>`;
+        return `<div style="padding:3px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);white-space:pre-wrap;word-break:break-all;">${linkify(line)}</div>`;
       };
       if(plsp.length){
         secHtml+=`<div style="font-size:12px;font-weight:600;color:var(--primary);padding:4px 0 2px;">人民日报 · 人民时评</div>`+plsp.slice(0,3).map(newsItem).join('');
@@ -4803,7 +4789,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.36 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.38 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
@@ -5305,7 +5291,7 @@ async function forceRefreshPush(){
     // 如果当前时间已过22点，也重新生成晚间推送
     const h=new Date().getHours();
     if(h>=22){
-      generateNightPush();
+      await generateNightPush();
     }
     toast('推送已重新生成');
   }catch(e){
@@ -5342,7 +5328,10 @@ function cleanCaseTail(text){
   }).replace(/\s+$/,'').trim(); // 清理结尾多余空白
 }
 /* 智能解析申论素材（兼容Word导出格式：子分类标题无【】、跳过"用途"行）
-   返回结构化数组：[{topic:'高质量发展', sections:{'开篇金句':[...],'分论点框架':[...],...}}] */
+   v2.2.38：支持 3 级结构 — 大话题（### 一、经济建设）→ 子话题（（一）高质量发展）→ 子分类（开篇金句等）
+   返回结构化数组：[{topic:'一、经济建设', subTopics:[{topic:'高质量发展', sections:{开篇金句:[...]}}]}]（3 级）
+                    或 [{topic:'高质量发展', sections:{开篇金句:[...]}}]（2 级，旧数据兼容）
+                    方法论章节仍用 splitMode 切分（4 个 SUB_NAMES 硬编码）*/
 function parseShenlunContent(records){
   // 子分类关键词（长词优先）
   const subTypes=['开篇金句','结尾金句','分论点框架','点明观点','阐述意义','分析问题','提出对策','案例举证','愿景展望','行动号召','金句','案例'];
@@ -5350,43 +5339,75 @@ function parseShenlunContent(records){
   // 目录关键词（一级/二级目录跳过）
   const skipHead=['哲学基础','思想方法','马克思辩证唯物主义','毛泽东哲学思想','新思想','名词解释','写作素材'];
   const results=[];
-  let curTopic='';
-  let curSections={}; // {type: [texts]}
-  let curType='观点'; // 当前子分类：显式记录"最近遇到的子分类标题"，避免 Object.keys 顺序(首次插入序)误导
-  // 3级结构支持（方法论章节）：一个话题下含多个隐式子话题（系统思维/问题导向/调查研究/干事创业），
-  // 每个子话题是"开篇金句…行动号召"的完整循环，靠同名子分类标题重复出现隐式分隔（原文无显式子话题标题行）。
-  let splitMode=false;          // 当前话题是否需要按循环切分为多个子话题
-  let subTopics=[];             // 收集到的子话题 {topic, sections}
-  let subIdx=0;                 // 当前子话题序号
-  let seenTypes=new Set();      // 当前子话题内已出现的子分类（用于检测循环重复）
-  const SUB_NAMES=['（一）系统思维','（二）问题导向','（三）调查研究','（四）干事创业']; // 方法论4个子话题标准名
-  const flushTopic=()=>{
+  // 3 级：grandTopic（### 一、经济建设）→ subTopic（（一）高质量发展）→ curSections
+  let grandTopic='';
+  let subTopic='';
+  let curSections={};
+  let curType='观点';
+  let subTopicsArr=[]; // 当前 grandTopic 下收集的子话题
+  // 兼容方法论切分
+  let splitMode=false;
+  let subIdx=0;
+  let seenTypes=new Set();
+  const SUB_NAMES=['（一）系统思维','（二）问题导向','（三）调查研究','（四）干事创业'];
+
+  const flushGrand=()=>{
     if(splitMode){
-      // 先把当前未闭合的子话题收尾
       if(Object.values(curSections).some(a=>a&&a.length)){
         const name=SUB_NAMES[subIdx]||('方法论（'+(subIdx+1)+'）');
-        subTopics.push({topic:name, sections:curSections});
+        subTopicsArr.push({topic:name, sections:curSections});
       }
-      subTopics.forEach(st=>results.push(st));
-      subTopics=[]; subIdx=0; seenTypes=new Set();
-    }else if(Object.values(curSections).some(a=>a&&a.length)){
-      results.push({topic:curTopic||'未分类', sections:curSections});
+      if(subTopicsArr.length){
+        results.push({topic:grandTopic||'方法论', subTopics:subTopicsArr});
+      }
+      splitMode=false; subIdx=0; seenTypes=new Set();
+    } else {
+      // 收尾当前 subTopic
+      if(subTopic && Object.values(curSections).some(a=>a&&a.length)){
+        subTopicsArr.push({topic:subTopic, sections:curSections});
+      }
+      if(grandTopic){
+        if(subTopicsArr.length){
+          // 3 级
+          results.push({topic:grandTopic, subTopics:subTopicsArr});
+        } else if(Object.values(curSections).some(a=>a&&a.length)){
+          // 2 级兼容（没 subTopic）
+          results.push({topic:subTopic||grandTopic, sections:curSections});
+        }
+      } else if(subTopic && Object.values(curSections).some(a=>a&&a.length)){
+        // 没有 grandTopic 兜底
+        results.push({topic:subTopic, sections:curSections});
+      }
     }
-    curTopic=''; curSections={}; curType='观点';
+    grandTopic=''; subTopic=''; curSections={}; curType='观点'; subTopicsArr=[];
   };
-  // 开启新话题（同时判断是否进入"按循环切分子话题"模式）
-  const startTopic=(line)=>{
-    flushTopic();
-    curTopic=line; curSections={}; curType='观点';
+  const startGrand=(line)=>{
+    flushGrand();
+    grandTopic=line; subTopic=''; curSections={}; curType='观点'; subTopicsArr=[];
     splitMode=/方法论/.test(line);
-    if(splitMode){ subTopics=[]; subIdx=0; seenTypes=new Set(); }
+    if(splitMode){ subIdx=0; seenTypes=new Set(); }
   };
-  // 遇到子分类标题：splitMode 下检测循环重复→切分新子话题
+  const startSub=(line)=>{
+    if(splitMode) return; // 方法论切分模式不用
+    if(subTopic && Object.values(curSections).some(a=>a&&a.length)){
+      subTopicsArr.push({topic:subTopic, sections:curSections});
+    }
+    subTopic=line; curSections={}; curType='观点';
+  };
+  // 兼容旧的 startTopic 入口（2 级数据：把 grandTopic 设为空，subTopic 作为 topic）
+  const startTopicLegacy=(line)=>{
+    // 2 级数据：把 line 当作 subTopic（兜底）
+    if(!grandTopic){
+      startSub(line);
+    } else {
+      startSub(line);
+    }
+  };
   const beginType=(t)=>{
     if(splitMode){
       if(seenTypes.has(t) && subIdx<SUB_NAMES.length){
         const name=SUB_NAMES[subIdx]||('方法论（'+(subIdx+1)+'）');
-        subTopics.push({topic:name, sections:curSections});
+        subTopicsArr.push({topic:name, sections:curSections});
         subIdx++;
         curSections={}; seenTypes=new Set();
       }
@@ -5412,24 +5433,26 @@ function parseShenlunContent(records){
         beginType(numberedSub[1]);
         continue;
       }
-      // 2) 话题标题：仅识别（一）（二）…、1. 2. 等编号标题（含冒号的编号行视为内容而非话题）
-      const isTopic=line.length<=30 && line.length>=3 && !/[：:]/.test(line) && (
-        /^（[一二三四五六七八九十\d]+）/.test(line)||
-        /^\d+[\.、]/.test(line)
-      );
-      if(isTopic){
-        startTopic(line);
-        continue;
-      }
-      // 3) 大目录标题（跳过）
-      if(skipHead.some(s=>line===s||line===s+'：'||line.endsWith(s))) continue;
-      // 4) "用途："说明行（跳过）
-      if(/^用途[：:]/.test(line)) continue;
-      // 5) 一级目录即话题标题："一、乡村振兴"（短行，像目录）
+      // 2) 大话题标题（### 一、经济建设 或 "一、经济建设"）：先匹配这一级
       if(/^[一二三四五六七八九十]+[、，]/.test(line)&&line.length<=20){
-        startTopic(line);
+        startGrand(line);
         continue;
       }
+      // 3) 子话题标题（（一）高质量发展 等）：有 grandTopic 时挂在 grandTopic 下；没 grandTopic 时当 2 级 topic
+      if(line.length<=30 && !/[：:]/.test(line) && /^（[一二三四五六七八九十\d]+）/.test(line)){
+        if(grandTopic) startSub(line);
+        else startSub(line);
+        continue;
+      }
+      // 3.5) 旧版 isTopic 兜底：1. 2. 等编号标题
+      if(line.length<=30 && !/[：:]/.test(line) && /^\d+[\.、]/.test(line)){
+        startSub(line);
+        continue;
+      }
+      // 4) 大目录标题（跳过）
+      if(skipHead.some(s=>line===s||line===s+'：'||line.endsWith(s))) continue;
+      // 5) "用途："说明行（跳过）
+      if(/^用途[：:]/.test(line)) continue;
       // 6) 普通内容：归到当前子分类（curType = 最近遇到的子分类标题）
       const type=curType;
       if(!curSections[type]) curSections[type]=[];
@@ -5451,7 +5474,7 @@ function parseShenlunContent(records){
       }
     }
   });
-  flushTopic();
+  flushGrand();
   return results;
 }
 /* 从解析结果中提取某子分类的所有内容（过滤空案例） */
@@ -5748,6 +5771,8 @@ function fmtNewsTime(ts){
 
 async function generateMorningPush(){
   try{
+    // v2.2.38：生成前先拉一次云端数据，确保多设备数据完整
+    try{ await syncPullAndMerge(); }catch(e){ console.warn('[morning push] pull pre err', e); }
     const today=todayStr();
     let content='';
     // ① 薄弱模块提醒（易错考点/错题复习已移到主页"待复习"区，推送不再重复列出）
@@ -5791,7 +5816,9 @@ function getModuleTips(key){
   };
   return tips[key]||'';
 }
-function generateNightPush(){
+async function generateNightPush(){
+  // v2.2.38：生成前先拉取一次云端数据，避免另一台设备录入的刷题记录未同步而漏算（如 8-20 录 70 题、晚 22 点时设备仅同步到 20 题）
+  try{ await syncPullAndMerge(); }catch(e){ console.warn('[night push] pull pre err', e); }
   const today=todayStr();
   const todayRecords=DB.records.filter(r=>r.date===today);
   const total=todayRecords.reduce((s,r)=>s+r.total,0);
@@ -5806,7 +5833,9 @@ function generateNightPush(){
   renderPush();
   toast('已生成晚间复盘提醒');
 }
-function generateWeeklyReport(){
+async function generateWeeklyReport(){
+  // v2.2.38：同晚间推送，生成前先拉一次云端数据
+  try{ await syncPullAndMerge(); }catch(e){ console.warn('[weekly report] pull pre err', e); }
   const week=getRecentDates(7);
   const weekErrors=DB.errors.filter(e=>week.includes(e.date));
   let content='本周错题汇总报告\n'+new Date().toLocaleDateString('zh-CN')+'\n\n';
@@ -5854,7 +5883,7 @@ function generateWeeklyReport(){
 /* ============================================================
    定时提醒检查（每次打开应用时检查）
    ============================================================ */
-function checkScheduledPush(){
+async function checkScheduledPush(){
   if(DB.settings.autoPush===false) return; // 定时推送已关闭
   const now=new Date();
   const h=now.getHours();
@@ -5864,18 +5893,19 @@ function checkScheduledPush(){
   if(h>=7 && !lastPush.includes(today+'_morning')){
     DB.settings.lastPush=(lastPush?lastPush+',':'')+today+'_morning';
     saveDB();
-    generateMorningPush().then(()=>{
+    try{
+      await generateMorningPush();
       toast('早间推送已生成');
-    }).catch(e=>{
+    }catch(e){
       console.error('早间推送生成失败',e);
       toast('早间推送生成失败');
-    });
+    }
   }
   // 晚22点后且今天没推过晚间
   if(h>=22 && !lastPush.includes(today+'_night')){
     DB.settings.lastPush=(DB.settings.lastPush?DB.settings.lastPush+',':'')+today+'_night';
     saveDB();
-    generateNightPush();
+    await generateNightPush();
     toast('晚间复盘提醒');
   }
 }
@@ -5959,6 +5989,20 @@ function init(){
     fixEbb(DB.errorEbb); fixEbb(DB.mistakeEbb);
     DB._ebbIntervalV3=true;
     saveDB();
+  }
+  // v2.2.37：把"5轮已满但未标已掌握"的历史数据补齐（幂等，每台设备各自修本地，不依赖标记避免同步传播 race）。
+  // v2.2.34 之前完成阈值为>=6，第5轮完成后不会置 done，存量条目需补标已掌握
+  {
+    let _ebbDone5Changed=false;
+    const fixDone5=(ebb)=>{
+      if(!ebb) return;
+      Object.values(ebb).forEach(st=>{
+        if(!st||st.done) return;
+        if((st.stage||0)>=5){ st.done=true; st.next=''; delete st.pending; _ebbDone5Changed=true; }
+      });
+    };
+    fixDone5(DB.errorEbb); fixDone5(DB.mistakeEbb);
+    if(_ebbDone5Changed) saveDB();
   }
   // v2.2.28 一次性补丁：给历史缺失录入日期的考点回填 date
   // 根因：8/2 旧版本"从错题导入"只存 {模块,知识点,备注}，未写 date 字段（现版本已修复，新导入都有）
