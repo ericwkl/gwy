@@ -305,7 +305,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.38</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.39</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -4300,7 +4300,11 @@ async function renderAccu(){
             const filtered=(type==='案例举证'||type==='案例')?arr.filter(x=>isCaseValid(x)).map(x=>cleanCaseTail(x)):arr;
             if(!filtered.length) continue;
             const p2=seededShuffle(filtered,seed+31+'_'+type).slice(0,2);
-            sectionHtml+=`<details open style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--text);cursor:pointer;padding:4px 0;">${escapeHtml(type)}</summary><div style="padding:4px 0 6px;">${p2.map(x=>`<div style="font-size:12px;color:var(--text);line-height:1.7;padding:2px 0;white-space:pre-wrap;word-break:break-word;">${escapeHtml(x)}</div>`).join('')}</div></details>`;
+            // v2.2.39：提出对策为"标题\n对策1\n对策2…"块结构，首行加粗作标题、其余行逐条显示
+            const renderItem=(x)=>type==='提出对策'&&x.indexOf('\n')>-1
+              ? (()=>{const ls=x.split('\n');const head=escapeHtml(ls[0]);const body=ls.slice(1).map(escapeHtml).join('<br>');return `<div style="font-size:12px;color:var(--text);line-height:1.7;padding:2px 0;white-space:pre-wrap;word-break:break-word;"><span style="font-weight:600;color:var(--primary);">${head}</span>${body?('<br>'+body):''}</div>`;})()
+              : `<div style="font-size:12px;color:var(--text);line-height:1.7;padding:2px 0;white-space:pre-wrap;word-break:break-word;">${escapeHtml(x)}</div>`;
+            sectionHtml+=`<details open style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--text);cursor:pointer;padding:4px 0;">${escapeHtml(type)}</summary><div style="padding:4px 0 6px;">${p2.map(renderItem).join('')}</div></details>`;
           }
           const tagText=t.sub||t.grand||'';
           cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}<span style="font-size:11px;color:var(--text-light);font-weight:normal;margin-left:4px;">${escapeHtml(t.grand||'')}</span></span><span class="section-tag" title="${escapeHtml(t.grand||'')}">${escapeHtml(tagText)}</span></div>${sectionHtml}</div>`;
@@ -4789,7 +4793,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.38 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.39 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
@@ -5468,6 +5472,18 @@ function parseShenlunContent(records){
           if(/^→\s*可论证[：:]\s*$/.test(line)) continue;
           if(curSections[type].length) curSections[type][curSections[type].length-1]+='\n'+line;
           else curSections[type].push(line);
+        }
+      }else if(type==='提出对策'){
+        // 提出对策块合并（v2.2.39）：原文是"对策标题行 + 若干具体对策行"成块出现。
+        // 标题行 = 短语（无句末标点、≤25字、无"·"/编号前缀）→ 开启新块；
+        // 其余行（完整句、·开头、编号开头）→ 追加到当前块末尾，构成"标题\n对策1\n对策2…"。
+        const isTitle=/^[^。！？!?；;]*$/.test(line)&&line.length<=25&&!/^[·•]/.test(line)&&!/^\d+[.、]/.test(line);
+        if(isTitle){
+          curSections[type].push(line);
+        }else if(curSections[type].length){
+          curSections[type][curSections[type].length-1]+='\n'+line;
+        }else{
+          curSections[type].push(line);
         }
       }else{
         curSections[type].push(line);
