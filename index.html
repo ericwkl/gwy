@@ -305,7 +305,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.39</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.41</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -4177,7 +4177,7 @@ async function renderAccu(){
         let gdList=liveNews.gd.filter(n=>isGuangdongNews(n.title)).slice(0,3);
         if(!gdList.length){
           const gdPool=SZ_HOT_POOL.filter(h=>h.isGD);
-          gdList=seededShuffle(gdPool,seed+1).slice(0,2).map(h=>({title:h.title,url:h.url||''}));
+          gdList=dailyPick(gdPool,20260810,2).map(h=>({title:h.title,url:h.url||''}));
         }
         if(gdList.length){
           newsSections+=`<details open style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--primary);cursor:pointer;padding:4px 0;">广东要闻</summary><div>${gdList.map(n=>`<div style="padding:3px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);white-space:pre-wrap;word-break:break-all;">${linkify('· '+n.title+(n.url?'\n  '+n.url:''))}</div>`).join('')}</div></details>`;
@@ -4196,7 +4196,7 @@ async function renderAccu(){
         // 离线兜底
         const gdPool=SZ_HOT_POOL.filter(h=>h.isGD);
         const otherPool=SZ_HOT_POOL.filter(h=>!h.isGD);
-        const hot=[...seededShuffle(gdPool,seed+1).slice(0,2), ...seededShuffle(otherPool,seed+2).slice(0,4)];
+        const hot=[...dailyPick(gdPool,20260810,2), ...dailyPick(otherPool,20260811,4)];
         newsSections=`<details open style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--primary);cursor:pointer;padding:4px 0;">近期热点</summary><div>${hot.map(h=>`<div style="padding:3px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);white-space:pre-wrap;word-break:break-all;">${linkify('· ['+h.date+'] '+h.title+(h.url?'\n  '+h.url:''))}</div>`).join('')}</div></details>`;
         cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span class="section-tag">近期</span></div>${newsSections}</div>`;
       }
@@ -4242,8 +4242,8 @@ async function renderAccu(){
           const rich=tzTopics.filter(t=>t.items.length>=5);
           const pool=rich.length?rich:tzTopics.filter(t=>t.items.length>=2);
           const finalPool=pool.length?pool:tzTopics;
-          const t=seededShuffle(finalPool,seed+10)[0];
-          const picked=seededShuffle(t.items,seed+11).slice(0,5);
+          const t=dailyPick(finalPool,20260810,1)[0];
+          const picked=dailyPick(t.items, hashStr(t.topic)||20260810, 5);
           if(picked.length){
             cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>时政积累</span><span class="section-tag">${escapeHtml(t.topic)}</span></div>
             ${picked.map(p=>`<div style="padding:4px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);white-space:pre-wrap;">${escapeHtml(p)}</div>`).join('')}</div>`;
@@ -4256,7 +4256,7 @@ async function renderAccu(){
     if(!items.length) continue;
     if(cat.display==='言语素材'){
       const words=extractYyWords(items);
-      const picked=seededShuffle(words,seed+20).slice(0,12);
+      const picked=dailyPick(words,20260820,12);
       if(picked.length){
         cards+=`<div class="card">
           <div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span class="section-tag">${words.length}条</span></div>
@@ -4292,14 +4292,18 @@ async function renderAccu(){
             grandTopics.push({grand:t.topic, sub:'', sections:t.sections});
           }
         }
-        const picked=seededShuffle(grandTopics,seed+30).slice(0,1);
+        // v2.2.41：按天顺序轮转（非随机），保证相邻天展示不同子话题。
+        // 原随机抽 1 个（from 31 子话题池）有 ~1/31 相邻重复率，用户反馈"一直看到同一模块"。
+        const slOrder=seededShuffle(grandTopics,20260801); // 固定打乱顺序，每日相同
+        const slIdx=((dayIndexOfToday()+(DB.accuSeedCount||0))%slOrder.length+slOrder.length)%slOrder.length;
+        const picked=[slOrder[slIdx]];
         for(const t of picked){
           let sectionHtml='';
           for(const [type,arr] of Object.entries(t.sections)){
             if(!arr||!arr.length) continue;
             const filtered=(type==='案例举证'||type==='案例')?arr.filter(x=>isCaseValid(x)).map(x=>cleanCaseTail(x)):arr;
             if(!filtered.length) continue;
-            const p2=seededShuffle(filtered,seed+31+'_'+type).slice(0,2);
+            const p2=dailyPick(filtered, hashStr(type)||20260801, 2);
             // v2.2.39：提出对策为"标题\n对策1\n对策2…"块结构，首行加粗作标题、其余行逐条显示
             const renderItem=(x)=>type==='提出对策'&&x.indexOf('\n')>-1
               ? (()=>{const ls=x.split('\n');const head=escapeHtml(ls[0]);const body=ls.slice(1).map(escapeHtml).join('<br>');return `<div style="font-size:12px;color:var(--text);line-height:1.7;padding:2px 0;white-space:pre-wrap;word-break:break-word;"><span style="font-weight:600;color:var(--primary);">${head}</span>${body?('<br>'+body):''}</div>`;})()
@@ -4315,8 +4319,8 @@ async function renderAccu(){
         const xtData=parseXiaoTi(xtItems);
         const xtCats=Object.keys(xtData).filter(k=>xtData[k].length);
         if(xtCats.length){
-          const pickCats=seededShuffle(xtCats,seed+40).slice(0,3);
-          const xtHtml=pickCats.map(xc=>`<details style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--text);cursor:pointer;padding:4px 0;">${escapeHtml(xc)}</summary><div>${seededShuffle(xtData[xc],seed+41).slice(0,3).map(x=>`<div style="font-size:12px;color:var(--text);padding:2px 0;line-height:1.7;white-space:pre-wrap;">${escapeHtml(x)}</div>`).join('')}</div></details>`).join('');
+          const pickCats=dailyPick(xtCats,20260830,3);
+          const xtHtml=pickCats.map(xc=>`<details style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--text);cursor:pointer;padding:4px 0;">${escapeHtml(xc)}</summary><div>${dailyPick(xtData[xc], hashStr(xc), 3).map(x=>`<div style="font-size:12px;color:var(--text);padding:2px 0;line-height:1.7;white-space:pre-wrap;">${escapeHtml(x)}</div>`).join('')}</div></details>`).join('');
           cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>申论小题</span><span class="section-tag">${xtCats.length}类</span></div>${xtHtml}</div>`;
         }
       }
@@ -4372,8 +4376,11 @@ async function renderAccu(){
         const rich=topics.filter(t=>t.items.length>=5);
         const pool=rich.length?rich:topics.filter(t=>t.items.length>=2);
         const finalPool=pool.length?pool:topics;
-        const t=seededShuffle(finalPool,seed+50)[0];
-        const picked=seededShuffle(t.items,seed+51).slice(0,5);
+        // v2.2.41：话题按天顺序轮转，保证相邻天展示不同话题（避免常识等模块每天撞同一话题）
+        const tzOrder=seededShuffle(finalPool,20260802);
+        const tzIdx=((dayIndexOfToday()+(DB.accuSeedCount||0))%tzOrder.length+tzOrder.length)%tzOrder.length;
+        const t=tzOrder[tzIdx];
+        const picked=dailyPick(t.items, hashStr(t.topic)||20260802, 5);
         cards+=`<div class="card">
           <div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span class="section-tag">${escapeHtml(t.topic)}</span></div>
           ${picked.map(p=>`<div style="padding:4px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);white-space:pre-wrap;">${escapeHtml(p)}</div>`).join('')}
@@ -4793,7 +4800,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.39 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.41 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
@@ -5578,6 +5585,27 @@ function seededShuffle(arr, seed){
   }
   return a;
 }
+/* 距基准日（2026-01-01 UTC）的天数序号，用于积累卡片按天顺序轮转，保证相邻天展示不同模块 */
+function dayIndexOfToday(){
+  const t=todayStr().split('-').map(Number);
+  const cur=Date.UTC(t[0],t[1]-1,t[2]);
+  const base=Date.UTC(2026,0,1);
+  return Math.floor((cur-base)/86400000);
+}
+function hashStr(str){ let h=5381; for(let i=0;i<str.length;i++) h=((h<<5)+h+str.charCodeAt(i))>>>0; return h>>>0; }
+/* 固定打乱顺序（每日相同）+ 按天环形取 count 条，保证相邻天展示不同内容。
+   所有层级（子话题/子分类条目/常识话题/知识点/言语/申论小题）的抽取都走这里，
+   彻底避免"今天和昨天一模一样"——旧版随机种子相邻天强相关会撞同。
+   salt 数字区分不同层级/子分类，DB.accuSeedCount 支持"换一批"偏移。 */
+function dailyPick(arr, salt, count){
+  if(!arr||!arr.length) return [];
+  const sh=seededShuffle(arr, (salt>>>0)||1);
+  const len=sh.length;
+  const off=(((dayIndexOfToday()+(DB.accuSeedCount||0)+(salt>>>0))%len)+len)%len;
+  const out=[];
+  for(let i=0;i<Math.min(count,len);i++) out.push(sh[(off+i)%len]);
+  return out;
+}
 /* 积累页种子：当天日期 + 换一批次数（点换一批+1，新一天归零） */
 function getAccuSeed(){
   const today=todayStr();
@@ -5587,9 +5615,12 @@ function getAccuSeed(){
     DB.accuHtmlCache=null; // 新一天清除渲染缓存
     saveDB();
   }
-  // 种子 = 日期数字 + 换一批次数
-  const dateNum=parseInt(today.replace(/-/g,''));
-  return dateNum*1000 + (DB.accuSeedCount||0);
+  // v2.2.41：种子用日期字符串 djb2 哈希（非旧版的 dateNum*1000）。旧版相邻日期种子只差 1000，
+  // 在 seededShuffle 下强相关，导致连续多天抽到同一模块（实测 2026 全年 31 子话题池相邻重复 31/364）；
+  // 改用哈希后相邻日期种子无相关性，变为纯随机（1/31 偶发），每日轮换正常。
+  let h=5381;
+  for(let i=0;i<today.length;i++) h=((h<<5)+h+today.charCodeAt(i))>>>0;
+  return h + (DB.accuSeedCount||0);
 }
 /* 手动换一批：种子+1，清除缓存触发重新渲染 */
 function accuRefresh(){
