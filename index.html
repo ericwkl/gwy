@@ -305,7 +305,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.41</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.45</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -4292,7 +4292,7 @@ async function renderAccu(){
             grandTopics.push({grand:t.topic, sub:'', sections:t.sections});
           }
         }
-        // v2.2.41：按天顺序轮转（非随机），保证相邻天展示不同子话题。
+        // v2.2.43：按天顺序轮转（非随机），保证相邻天展示不同子话题。
         // 原随机抽 1 个（from 31 子话题池）有 ~1/31 相邻重复率，用户反馈"一直看到同一模块"。
         const slOrder=seededShuffle(grandTopics,20260801); // 固定打乱顺序，每日相同
         const slIdx=((dayIndexOfToday()+(DB.accuSeedCount||0))%slOrder.length+slOrder.length)%slOrder.length;
@@ -4320,7 +4320,7 @@ async function renderAccu(){
         const xtCats=Object.keys(xtData).filter(k=>xtData[k].length);
         if(xtCats.length){
           const pickCats=dailyPick(xtCats,20260830,3);
-          const xtHtml=pickCats.map(xc=>`<details style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--text);cursor:pointer;padding:4px 0;">${escapeHtml(xc)}</summary><div>${dailyPick(xtData[xc], hashStr(xc), 3).map(x=>`<div style="font-size:12px;color:var(--text);padding:2px 0;line-height:1.7;white-space:pre-wrap;">${escapeHtml(x)}</div>`).join('')}</div></details>`).join('');
+          const xtHtml=pickCats.map(xc=>{const items=dailyPick(xtData[xc], hashStr(xc), 3); return `<details style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--text);cursor:pointer;padding:4px 0;">${escapeHtml(xc)}</summary><div>${items.map(x=>{if(/万能思维体系/.test(xc)) return renderWanneng(x); const lines=x.split('\n');if(lines.length<=1)return`<div style="font-size:12px;color:var(--text);padding:2px 0;line-height:1.7;">${escapeHtml(x)}</div>`;return`<div style="font-size:12px;color:var(--text);padding:2px 0;line-height:1.7;">${lines.map((l,i)=>i===0?`<span style="font-weight:500;">${escapeHtml(l)}</span>`:`<div style="padding-left:1em;margin-top:1px;color:var(--text-secondary);">${escapeHtml(l)}</div>`).join('')}</div>`;}).join('')}</div></details>`;}).join('');
           cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>申论小题</span><span class="section-tag">${xtCats.length}类</span></div>${xtHtml}</div>`;
         }
       }
@@ -4376,7 +4376,7 @@ async function renderAccu(){
         const rich=topics.filter(t=>t.items.length>=5);
         const pool=rich.length?rich:topics.filter(t=>t.items.length>=2);
         const finalPool=pool.length?pool:topics;
-        // v2.2.41：话题按天顺序轮转，保证相邻天展示不同话题（避免常识等模块每天撞同一话题）
+        // v2.2.43：话题按天顺序轮转，保证相邻天展示不同话题（避免常识等模块每天撞同一话题）
         const tzOrder=seededShuffle(finalPool,20260802);
         const tzIdx=((dayIndexOfToday()+(DB.accuSeedCount||0))%tzOrder.length+tzOrder.length)%tzOrder.length;
         const t=tzOrder[tzIdx];
@@ -4800,7 +4800,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.41 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.45 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
@@ -5526,18 +5526,19 @@ function parseXiaoTi(records){
   const result={}; // {分类: [内容]}
   let curCat='';
   let curTopic='';
+  let inSectionBlock=false; // v2.2.43：是否当前在章节标题块内（用于多层嵌套合并）
   records.forEach(k=>{
     const lines=(k.content||'').split(/\n+/).map(s=>s.trim().replace(/^[▼▷▶\s#*]+/,'').replace(/[*#]+$/,'')).filter(Boolean);
     for(const line of lines){
       // 一级标题：一、二、三、
       const m1=line.match(/^[一二三四五六七八九十]+、(.+)$/);
-      if(m1){ curCat=m1[1].trim(); curTopic=''; continue; }
+      if(m1){ curCat=m1[1].trim(); curTopic=''; inSectionBlock=false; continue; }
       // 二级：（一）（二）
       const m2=line.match(/^（[一二三四五六七八九十\d]+）(.+)$/);
-      if(m2){ curTopic=m2[1].trim(); continue; }
+      if(m2){ curTopic=m2[1].trim(); inSectionBlock=false; continue; }
       // XX类话题 / XX话题
       const m3=line.match(/^(.+(?:类话题|话题))$/);
-      if(m3){ curTopic=m3[1].trim(); continue; }
+      if(m3){ curTopic=m3[1].trim(); inSectionBlock=false; continue; }
       // 内容行（v2.2.28：≥5 字，5 字的对子如"市场一政府"也要保留）
       if(line.length>=5 && !/^用途[：:]/.test(line)){
         const key=curTopic?curCat+'·'+curTopic:curCat;
@@ -5550,13 +5551,37 @@ function parseXiaoTi(records){
         if(/万能思维体系/.test(key) && /^eg[.：]/.test(line) && result[key].length && /）\s*$/.test(result[key][result[key].length-1])){
           result[key][result[key].length-1]+='\n'+line;
         }else{
-          const isPair=/^[^，。；：的而是和与对为\u2014\u2013\-]{2,20}[\u2014\u2013\-一][^，。；：的而是和与对为\u2014\u2013\-]{2,20}$/.test(line);
-          if(isPair){
-            result[key].push(line);
-          }else if(/矛盾|范畴/.test(curCat) && result[key].length){
-            result[key][result[key].length-1]+='\n'+line;
+          // v2.2.43：层级感知块合并 —— 仅对"万能思维体系"分类启用（该分类有"增容技巧→五个要素→政策实施的主体"多层嵌套），
+          // 其他分类（对策积累·XX类话题/规范表达等）的每行都是独立条目，不应合并。
+          // 识别"章节标题行"（包含 ：、≤45字、非eg/非编号开头），后续所有行追加到当前块末尾，
+          // 直到遇到新的 一级/二级/m3 标题才退出。
+          if(/万能思维体系/.test(key)){
+            const isSectionHeader=/[^：:]{2,40}[：:]/.test(line) && line.length<=45 && !/^eg[.\s：:]/.test(line) && !/^\d+[\.\s]/.test(line);
+            if(inSectionBlock){
+              result[key][result[key].length-1]+='\n'+line;
+            }else if(isSectionHeader){
+              result[key].push(line);
+              inSectionBlock=true;
+            }else{
+              const isPair=/^[^，。；：的而是和与对为\u2014\u2013\-]{2,20}[\u2014\u2013\-一][^，。；：的而是和与对为\u2014\u2013\-]{2,20}$/.test(line);
+              if(isPair){
+                result[key].push(line);
+              }else if(/矛盾|范畴/.test(curCat) && result[key].length){
+                result[key][result[key].length-1]+='\n'+line;
+              }else{
+                result[key].push(line);
+              }
+            }
           }else{
-            result[key].push(line);
+            // 非万能思维体系分类：保持原有独立条目逻辑
+            const isPair=/^[^，。；：的而是和与对为\u2014\u2013\-]{2,20}[\u2014\u2013\-一][^，。；：的而是和与对为\u2014\u2013\-]{2,20}$/.test(line);
+            if(isPair){
+              result[key].push(line);
+            }else if(/矛盾|范畴/.test(curCat) && result[key].length){
+              result[key][result[key].length-1]+='\n'+line;
+            }else{
+              result[key].push(line);
+            }
           }
         }
       }
@@ -5601,10 +5626,37 @@ function dailyPick(arr, salt, count){
   if(!arr||!arr.length) return [];
   const sh=seededShuffle(arr, (salt>>>0)||1);
   const len=sh.length;
-  const off=(((dayIndexOfToday()+(DB.accuSeedCount||0)+(salt>>>0))%len)+len)%len;
+  if(len<=count) return sh.slice(0, count);
+  // v2.2.44：相邻天起点偏移 = 窗口大小 count（而非固定+1），保证相邻天的 count 条窗口完全错开、0 重叠。
+  // 修复：v2.2.41 固定+1 偏移导致抽 12 条的言语素材每天只换 1 条、与昨天 11 条相同（92% 重叠）的问题。
+  // 现在相邻天起点差 count 个位置，窗口不相交；轮转周期 = ceil(len/count) 天（328条抽12条约27天轮完一圈）。
+  const step=count;
+  const off=(((dayIndexOfToday()*step+(DB.accuSeedCount||0)*step+(salt>>>0))%len)+len)%len;
   const out=[];
   for(let i=0;i<Math.min(count,len);i++) out.push(sh[(off+i)%len]);
   return out;
+}
+/* 万能思维体系层级块渲染：合并后的多行块按层级（短冒号行=父级 / "XX（…）：内容"=并列项 / 其余=叶子）
+   重建飞书原文档的 "1.2.3. 并列项 → - 子项 → - 子子项" 结构，避免平铺成一坨。 */
+function renderWanneng(text){
+  const lines=text.split('\n').filter(Boolean);
+  if(lines.length<=1) return `<div style="font-size:12px;color:var(--text);padding:2px 0;">${escapeHtml(text)}</div>`;
+  let html=`<div style="font-size:12px;font-weight:600;color:var(--primary);padding:2px 0;">${escapeHtml(lines[0])}</div>`;
+  const stack=[]; let l1=0;
+  for(let i=1;i<lines.length;i++){
+    const line=lines[i]; const esc=escapeHtml(line);
+    const isShortParent=/：\s*$/.test(line) && line.length<=12;
+    if(stack.length===0 && /（.+）.*：/.test(line) && !isShortParent){
+      l1++; html+=`<div style="padding-left:1em;margin-top:2px;line-height:1.7;">${l1}. ${esc}</div>`;
+    }else if(isShortParent){
+      if(stack.length===0){ l1++; html+=`<div style="padding-left:1em;margin-top:3px;line-height:1.7;font-weight:500;">${l1}. ${esc}</div>`; }
+      else { const d=stack.length; html+=`<div style="padding-left:${d+1}em;margin-top:2px;line-height:1.7;font-weight:500;">- ${esc}</div>`; }
+      stack.push(1);
+    }else{
+      const d=stack.length; html+=`<div style="padding-left:${d+1}em;margin-top:1px;line-height:1.7;color:var(--text-secondary);">- ${esc}</div>`;
+    }
+  }
+  return html;
 }
 /* 积累页种子：当天日期 + 换一批次数（点换一批+1，新一天归零） */
 function getAccuSeed(){
@@ -5615,7 +5667,7 @@ function getAccuSeed(){
     DB.accuHtmlCache=null; // 新一天清除渲染缓存
     saveDB();
   }
-  // v2.2.41：种子用日期字符串 djb2 哈希（非旧版的 dateNum*1000）。旧版相邻日期种子只差 1000，
+  // v2.2.43：种子用日期字符串 djb2 哈希（非旧版的 dateNum*1000）。旧版相邻日期种子只差 1000，
   // 在 seededShuffle 下强相关，导致连续多天抽到同一模块（实测 2026 全年 31 子话题池相邻重复 31/364）；
   // 改用哈希后相邻日期种子无相关性，变为纯随机（1/31 偶发），每日轮换正常。
   let h=5381;
