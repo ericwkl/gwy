@@ -305,7 +305,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.47</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.48</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -4074,11 +4074,32 @@ function extractYyWords(kbItems){
       if(!seen.has(word)){ seen.add(word); words.push('【'+word+'】'+body.slice(0,120)); }
     }
     // 短词条（词名 2~8 字）：加【】，如"始终不渝：释义"（成语/词语通常为 2-5 字）
-    const re2a=/(?:^|\n)[【]?([^】\n：、，]{2,8})[】]?[:：]\s*([^\n]{2,150})/g;
+    // v2.2.48: ① 允许编号前缀"42. 裹足不前："（编号+点+词名），词名去掉编号后限 2~8 字；
+    //          ② 匹配后往后扫例句/诗行（到下一个词条为止），关联为"例："——修复
+    //          "裹足不前"词条只抓释义、紧跟的诗被当成独立词条的问题
+    const re2a=/(?:^|\n)(?:\d+[.、]\s*)?[【]?([^】\n：、，\d]{2,8})[】]?[:：]\s*([^\n]{2,150})/g;
     while((m=re2a.exec(txt))){
       const word=m[1], body=m[2].trim();
-      if(/积累$/.test(word)||/^(高频|易混|生词|词语|词汇|近义|反义|辨析)$/.test(word)) continue;
-      if(!seen.has(word)){ seen.add(word); words.push('【'+word+'】'+body.slice(0,120)); }
+      if(/积累$/.test(word)||/^(高频|易混|生词|词语|词汇|近义|反义|辨析)$/.test(word)||/诗云|诗曰|[^]云$|曰$/.test(word)) continue;
+      if(!seen.has(word)){
+        seen.add(word);
+        // 往后扫例句行：匹配位置之后的行，到下一个词条/编号/模块标题为止
+        let after=txt.slice(m.index+m[0].length).split(/\n/).map(s=>s.trim()).filter(Boolean);
+        let exs=[];
+        for(const ln of after){
+          if(/^[【]?[^】\n：、，\d]{2,8}[】]?[:：]/.test(ln) && !/诗云|诗曰|曰|云[：:]/.test(ln)) break; // 下一个"词：释义"（排除"张旭诗云："等引诗冒号）
+          if(/^\d+[.、]\s*\S/.test(ln)) break;                          // 下一个编号词条
+          if(/^[一二三四五六七八九十]+[、．.]/.test(ln)) break;          // 模块标题
+          if(/^（[一二三四五六七八九十\d]+）/.test(ln)) break;           // 小节标题
+          if(ln.length>=6 && !/^用途[：:]/.test(ln)) exs.push(ln);       // 例句/诗行
+          else break;
+        }
+        let s='【'+word+'】'+body.slice(0,120);
+        if(exs.length) s+='\n例：'+exs.slice(0,2).join('\n例：');
+        // 把例句行也加入 seen，防止 re2b 把诗当独立词条
+        exs.slice(0,2).forEach(e=>{ const ek=e.slice(0,40); if(!seen.has(ek)) seen.add(ek); });
+        words.push(s);
+      }
     }
     // 长句（词名 >8 字，多为某词条的例句/长内容，如"梳理百年党史让人留下深刻记忆：…"）：
     // 原样保留、不再误加【】当独立词条
@@ -5833,6 +5854,30 @@ function parseGovLocal(html){
   }
   return items;
 }
+/* 手机端直连广东省政府网"要闻"栏目解析（正则与代理端一致，同时匹配 post_ 与 mpost_ 移动版链接）。
+   v2.2.48: 作为"广东要闻"的直连兜底——代理只抓 PC 版 post_ 链接、漏掉 mpost_ 移动版（如 2026-08-21
+   高等教育高质量发展座谈会 mpost_4945564），直连从官网源抓取可补全，根治漏抓 */
+function parseGdLocal(html){
+  const items=[], seen=new Set();
+  const re=/<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+  let m;
+  while((m=re.exec(html))){
+    const href=m[1];
+    const t=m[2].replace(/<[^>]+>/g,' ').replace(/&nbsp;/g,' ').replace(/\s+/g,' ').trim();
+    if(t.length<10) continue;
+    // 仅抓取"要闻"栏目内容页（post_/mpost_ 均在 gdywdt/gdyw/content/ 下）
+    if(!/gdywdt\/gdyw\/content\/(m?post)_\d+\.html/.test(href)) continue;
+    if(/广东省政府网微博|地方政府网站|国务院部门/.test(t)) continue;
+    const url=href.startsWith('http')?href:'https://www.gd.gov.cn'+href;
+    const key=url.split('#')[0];
+    if(seen.has(key)) continue;
+    seen.add(key);
+    const dm=href.match(/\/(20\d{2})(\d{2})\//);
+    items.push({title:t.slice(0,60),url,date:dm?dm[1]+'-'+dm[2]:'',src:'广东省政府网'});
+    if(items.length>=15) break;
+  }
+  return items;
+}
 /* 抓取四源：gov(时政)/gd(广东)/qs(求是理论)/rm(人民网观点)，带30分钟缓存 */
 async function fetchLiveNews(force){
   const now=Date.now();
@@ -5870,6 +5915,20 @@ async function fetchLiveNews(force){
       }
     }catch(e){}
   }
+  // v2.2.48: 广东要闻双保险——代理 + 直连广东省政府网"要闻"栏目合并去重（根治代理漏抓 mpost_ 移动版）
+  // 不论代理是否成功都补充直连，最大化覆盖；直连失败则保持原样（容错）
+  try{
+    const res=await fetch('https://www.gd.gov.cn/gdywdt/gdyw/',{signal:AbortSignal.timeout(10000)});
+    if(res.ok){
+      const html=await res.text();
+      const gdDirect=parseGdLocal(html);
+      if(gdDirect.length){
+        const urlSet=new Set(result.gd.map(x=>x.url));
+        for(const x of gdDirect){ if(!urlSet.has(x.url)){ result.gd.push(x); urlSet.add(x.url); } }
+        if(result.via==='代理') result.via='代理+直连';
+      }
+    }
+  }catch(e){}
   try{ localStorage.setItem(NEWS_CACHE_KEY,JSON.stringify(result)); }catch(e){}
   return result;
 }
