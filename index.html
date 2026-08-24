@@ -305,7 +305,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.46</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.47</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -6391,19 +6391,28 @@ function scheduleSyncPush(){
   }, 3000);
 }
 /* 同步前瘦身：把错题/复盘中 >300KB 的截图 base64 上传到 Supabase Storage（原图不压缩），
-   数据库只存图片链接，避免整库超出 PostgREST 请求体上限；小图直接保留 base64 */
+   数据库只存图片链接，避免整库超出 PostgREST 请求体上限；小图直接保留 base64。
+   v2.2.47: 加去重账本 _uploadedMap —— 已上传过的图不再重复传（之前每次 push 都重传所有大图，
+   图多就超 45s 超时 → 显示"断开"）。本地 photos 仍是 base64（离线可看），账本只用于 push 去重，不上云 */
 async function slimForSync(){
   const clone = JSON.parse(JSON.stringify(DB));
-  // accuHtmlCache 是本地渲染缓存，不同步到云端（防止其他设备收到过时缓存）
   delete clone.accuHtmlCache;
+  delete clone._uploadedMap;                 // 去重账本是本地用的，不传上云端
+  if(!DB._uploadedMap) DB._uploadedMap = {};
   const tasks = [];
-  (clone.errors || []).forEach(e => { (e.photos || []).forEach((p, i) => { if(typeof p === 'string' && p.startsWith('data:') && p.length > 300 * 1024) tasks.push({ arr: e.photos, i, p }); }); });
-  (clone.reviews || []).forEach(r => { (r.photos || []).forEach((p, i) => { if(typeof p === 'string' && p.startsWith('data:') && p.length > 300 * 1024) tasks.push({ arr: r.photos, i, p }); }); });
+  (clone.errors || []).forEach(e => { (e.photos || []).forEach((p, i) => { if(typeof p === 'string' && p.startsWith('data:') && p.length > 300 * 1024){
+    if(DB._uploadedMap[p]) e.photos[i] = DB._uploadedMap[p];   // 传过的直接用账本里的链接，跳过上传
+    else tasks.push({ arr: e.photos, i, p });
+  }}); });
+  (clone.reviews || []).forEach(r => { (r.photos || []).forEach((p, i) => { if(typeof p === 'string' && p.startsWith('data:') && p.length > 300 * 1024){
+    if(DB._uploadedMap[p]) r.photos[i] = DB._uploadedMap[p];
+    else tasks.push({ arr: r.photos, i, p });
+  }}); });
   if(!tasks.length) return clone;
   for(const t of tasks.slice(0, 12)){
     try{
       const u = await uploadPhotoToStorage(t.p);
-      if(u && u !== t.p) t.arr[t.i] = u;
+      if(u && u !== t.p){ t.arr[t.i] = u; DB._uploadedMap[t.p] = u; }   // 上传成功记到账本，下次跳过
     }catch(e){}
   }
   return clone;
