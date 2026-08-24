@@ -305,7 +305,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.45</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.46</div>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -4320,7 +4320,19 @@ async function renderAccu(){
         const xtCats=Object.keys(xtData).filter(k=>xtData[k].length);
         if(xtCats.length){
           const pickCats=dailyPick(xtCats,20260830,3);
-          const xtHtml=pickCats.map(xc=>{const items=dailyPick(xtData[xc], hashStr(xc), 3); return `<details style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--text);cursor:pointer;padding:4px 0;">${escapeHtml(xc)}</summary><div>${items.map(x=>{if(/万能思维体系/.test(xc)) return renderWanneng(x); const lines=x.split('\n');if(lines.length<=1)return`<div style="font-size:12px;color:var(--text);padding:2px 0;line-height:1.7;">${escapeHtml(x)}</div>`;return`<div style="font-size:12px;color:var(--text);padding:2px 0;line-height:1.7;">${lines.map((l,i)=>i===0?`<span style="font-weight:500;">${escapeHtml(l)}</span>`:`<div style="padding-left:1em;margin-top:1px;color:var(--text-secondary);">${escapeHtml(l)}</div>`).join('')}</div>`;}).join('')}</div></details>`;}).join('');
+          const xtHtml=pickCats.map(xc=>{          const isWN=/万能思维体系/.test(xc);
+          let items;
+          if(isWN){
+            // v2.2.46 可见性修复：万能思维体系分类级 dailyPick(salt=20260830) 与分类内 dailyPick(salt=hashStr(xc))
+            // 两个窗口恰好错开1位、永不直接相交，导致 11 行层级块永远抽不到（45天重合0天）。
+            // 改为：固定层级块（含"用好万能八条"的11行块）常驻首项，其余2个位置在 eg 例子块中每日轮换（仍每天3条）。
+            const wnArr=xtData[xc];
+            const hier=wnArr.filter(x=>/用好万能八条/.test(x));
+            const eg=wnArr.filter(x=>!/用好万能八条/.test(x));
+            items=[...(hier.length?hier:dailyPick(wnArr,hashStr(xc),1)), ...dailyPick(eg, hashStr(xc), 2)];
+          } else {
+            items=dailyPick(xtData[xc], hashStr(xc), 3);
+          } return `<details style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--text);cursor:pointer;padding:4px 0;">${escapeHtml(xc)}</summary><div>${items.map(x=>{if(isWN && x.split('\n').length>2) return renderWanneng(x); const lines=x.split('\n');if(lines.length<=1)return`<div style="font-size:12px;color:var(--text);padding:2px 0;line-height:1.7;">${escapeHtml(x)}</div>`;return`<div style="font-size:12px;color:var(--text);padding:2px 0;line-height:1.7;">${lines.map((l,i)=>i===0?`<span style="font-weight:500;">${escapeHtml(l)}</span>`:`<div style="padding-left:1em;margin-top:1px;color:var(--text-secondary);">${escapeHtml(l)}</div>`).join('')}</div>`;}).join('')}</div></details>`;}).join('');
           cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>申论小题</span><span class="section-tag">${xtCats.length}类</span></div>${xtHtml}</div>`;
         }
       }
@@ -4800,7 +4812,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.45 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.46 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
