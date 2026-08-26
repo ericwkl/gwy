@@ -305,7 +305,7 @@ img{max-width:100%;display:block;}
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
     <div class="app-date" id="headerDate"></div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.48</div>
+    <omitted>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="syncBadgeBtn" onclick="showSyncStatus()" title="云端同步状态" style="position:relative;width:auto;padding:0 10px;font-size:11px;border-radius:20px;background:var(--bg-soft);display:flex;align-items:center;gap:4px;">
@@ -4047,9 +4047,15 @@ function extractYyWords(kbItems){
         // 例句：追加到当前侧（≥6字，排除"用途："说明行）
         if(cur && ln.length>=6 && !/^用途[：:]/.test(ln)) sides[cur].examples.push(ln);
       }
+      // v2.2.49：同一成语只留一份——对比组优先（辨析信息更全）。
+      // 若组内词之前已以单条形式加入 words，先把它顶掉，再 push 对比组，杜绝"不胜枚举"单条+VS组两份重复。
       if(pairWords.every(w=>sides[w].def)){
         const pairKey=pairWords.join('VS');
         if(!seen.has(pairKey)){
+          pairWords.forEach(w=>{
+            const i2=words.findIndex(x=>x.startsWith('【'+w+'】'));
+            if(i2>=0) words.splice(i2,1);
+          });
           seen.add(pairKey); pairWords.forEach(w=>seen.add(w));
           let s='【'+pairKey+'】';
           pairWords.forEach(w=>{
@@ -4277,7 +4283,8 @@ async function renderAccu(){
     if(!items.length) continue;
     if(cat.display==='言语素材'){
       const words=extractYyWords(items);
-      const picked=dailyPick(words,20260820,12);
+      // v2.2.49：pickFresh 近7天已展示去重（双保险：对比组去重+7天内不重样）
+      const picked=pickFresh(words,20260820,12,'accuYySeen');
       if(picked.length){
         cards+=`<div class="card">
           <div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span class="section-tag">${words.length}条</span></div>
@@ -4326,9 +4333,12 @@ async function renderAccu(){
             if(!filtered.length) continue;
             const p2=dailyPick(filtered, hashStr(type)||20260801, 2);
             // v2.2.39：提出对策为"标题\n对策1\n对策2…"块结构，首行加粗作标题、其余行逐条显示
+            // v2.2.39：提出对策为"标题\n对策1\n对策2…"块结构，首行加粗作标题、其余行逐条显示
+            // v2.2.49：表格识别——行内含 ≥2 个 \t 且为多行表格块（飞书表格导出用制表符分隔列），按列拆 grid 渲染；非表格行原样显示
             const renderItem=(x)=>type==='提出对策'&&x.indexOf('\n')>-1
               ? (()=>{const ls=x.split('\n');const head=escapeHtml(ls[0]);const body=ls.slice(1).map(escapeHtml).join('<br>');return `<div style="font-size:12px;color:var(--text);line-height:1.7;padding:2px 0;white-space:pre-wrap;word-break:break-word;"><span style="font-weight:600;color:var(--primary);">${head}</span>${body?('<br>'+body):''}</div>`;})()
-              : `<div style="font-size:12px;color:var(--text);line-height:1.7;padding:2px 0;white-space:pre-wrap;word-break:break-word;">${escapeHtml(x)}</div>`;
+              : (()=>{const tabLines=x.split('\n').filter(l=>l.indexOf('\t')>-1 && l.split('\t').length>=3);if(tabLines.length>=2 && type!=='提出对策'){const rows=tabLines.map(l=>l.split('\t').map(c=>escapeHtml(c.trim())));const cols=Math.max(...rows.map(r=>r.length));return `<div style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:6px;font-size:12px;line-height:1.6;margin:4px 0;padding:8px;border:1px solid var(--border);border-radius:4px;background:rgba(0,0,0,0.02);">${rows.map(r=>r.map((c,i)=>`<div${i===0?' style="font-weight:600;color:var(--primary);"':''}>${c}</div>`).join('')).join('')}</div>`;}return `<div style="font-size:12px;color:var(--text);line-height:1.7;padding:2px 0;white-space:pre-wrap;word-break:break-word;">${escapeHtml(x)}</div>`;})();
+            sectionHtml+=`<details open style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--text);cursor:pointer;padding:4px 0;">${escapeHtml(type)}</summary><div style="padding:4px 0 6px;">${p2.map(renderItem).join('')}</div></details>`;
             sectionHtml+=`<details open style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--text);cursor:pointer;padding:4px 0;">${escapeHtml(type)}</summary><div style="padding:4px 0 6px;">${p2.map(renderItem).join('')}</div></details>`;
           }
           const tagText=t.sub||t.grand||'';
@@ -4833,7 +4843,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.46 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.49 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
@@ -5669,6 +5679,40 @@ function dailyPick(arr, salt, count){
   for(let i=0;i<Math.min(count,len);i++) out.push(sh[(off+i)%len]);
   return out;
 }
+/* v2.2.49：近7天已展示去重抽取——言语素材等"复习型"内容专用。
+   与 dailyPick 的差别：优先抽近7天没展示过的词条（存 DB[storeKey]={d:日期, h:[词条hash]}，仅保留近7天），
+   不足 count 再从全部补。双保险：即使池子小/窗口回绕，7 天内也尽量不重样。 */
+function pickFresh(arr, salt, count, storeKey){
+  if(!arr||!arr.length) return [];
+  const sh=seededShuffle(arr, (salt>>>0)||1);
+  const len=sh.length;
+  if(len<=count) return sh.slice(0, count);
+  const today=todayStr();
+  // 近7天已展示集合（含今天）
+  let seenArr=(DB[storeKey]||[]).filter(s=>{
+    const diff=Math.floor((new Date(today)-new Date(s.d))/86400000);
+    return diff>=0 && diff<7;
+  });
+  const seenSet=new Set();
+  seenArr.forEach(s=>(s.h||[]).forEach(x=>seenSet.add(x)));
+  // 优先近7天未展示的
+  const fresh=sh.filter(x=>!seenSet.has(hashStr(x)));
+  let picked;
+  if(fresh.length>=count){
+    picked=fresh.slice(0, count);
+  }else{
+    picked=[...fresh];
+    for(const x of sh){ if(picked.length>=count) break; if(!picked.includes(x)) picked.push(x); }
+  }
+  // 记录当天展示（同一天多次调用=换一批，累加）
+  const todayRec=seenArr.find(s=>s.d===today);
+  const hashes=picked.map(x=>hashStr(x));
+  if(todayRec){ todayRec.h=[...new Set([...todayRec.h, ...hashes])]; }
+  else { seenArr.push({d:today, h:hashes}); }
+  DB[storeKey]=seenArr;
+  try{ saveDB(); }catch(e){}
+  return picked;
+}
 /* 万能思维体系层级块渲染：合并后的多行块按层级（短冒号行=父级 / "XX（…）：内容"=并列项 / 其余=叶子）
    重建飞书原文档的 "1.2.3. 并列项 → - 子项 → - 子子项" 结构，避免平铺成一坨。 */
 function renderWanneng(text){
@@ -6456,6 +6500,7 @@ function scheduleSyncPush(){
 async function slimForSync(){
   const clone = JSON.parse(JSON.stringify(DB));
   delete clone.accuHtmlCache;
+  delete clone.accuYySeen;                    // 近7天已展示去重记录是本地用的，不传上云端
   delete clone._uploadedMap;                 // 去重账本是本地用的，不传上云端
   if(!DB._uploadedMap) DB._uploadedMap = {};
   const tasks = [];
