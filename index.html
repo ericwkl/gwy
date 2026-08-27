@@ -4338,12 +4338,10 @@ async function renderAccu(){
             if(!filtered.length) continue;
             const p2=dailyPick(filtered, hashStr(type)||20260801, 2);
             // v2.2.39：提出对策为"标题\n对策1\n对策2…"块结构，首行加粗作标题、其余行逐条显示
-            // v2.2.39：提出对策为"标题\n对策1\n对策2…"块结构，首行加粗作标题、其余行逐条显示
             // v2.2.49：表格识别——行内含 ≥2 个 \t 且为多行表格块（飞书表格导出用制表符分隔列），按列拆 grid 渲染；非表格行原样显示
             const renderItem=(x)=>type==='提出对策'&&x.indexOf('\n')>-1
               ? (()=>{const ls=x.split('\n');const head=escapeHtml(ls[0]);const body=ls.slice(1).map(escapeHtml).join('<br>');return `<div style="font-size:12px;color:var(--text);line-height:1.7;padding:2px 0;white-space:pre-wrap;word-break:break-word;"><span style="font-weight:600;color:var(--primary);">${head}</span>${body?('<br>'+body):''}</div>`;})()
               : (()=>{const tabLines=x.split('\n').filter(l=>l.indexOf('\t')>-1 && l.split('\t').length>=3);if(tabLines.length>=2 && type!=='提出对策'){const rows=tabLines.map(l=>l.split('\t').map(c=>escapeHtml(c.trim())));const cols=Math.max(...rows.map(r=>r.length));return `<div style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:6px;font-size:12px;line-height:1.6;margin:4px 0;padding:8px;border:1px solid var(--border);border-radius:4px;background:rgba(0,0,0,0.02);">${rows.map(r=>r.map((c,i)=>`<div${i===0?' style="font-weight:600;color:var(--primary);"':''}>${c}</div>`).join('')).join('')}</div>`;}return `<div style="font-size:12px;color:var(--text);line-height:1.7;padding:2px 0;white-space:pre-wrap;word-break:break-word;">${escapeHtml(x)}</div>`;})();
-            sectionHtml+=`<details open style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--text);cursor:pointer;padding:4px 0;">${escapeHtml(type)}</summary><div style="padding:4px 0 6px;">${p2.map(renderItem).join('')}</div></details>`;
             sectionHtml+=`<details open style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--text);cursor:pointer;padding:4px 0;">${escapeHtml(type)}</summary><div style="padding:4px 0 6px;">${p2.map(renderItem).join('')}</div></details>`;
           }
           const tagText=t.sub||t.grand||'';
@@ -4848,7 +4846,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.50 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.51 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
@@ -6774,12 +6772,28 @@ function mergeObjFields(cur, x){
   for(const k of Object.keys(x)){
     if(k === 'id' || k === 'updatedAt') continue;
     const v = x[k], c = out[k];
-    if(k === 'photos' && Array.isArray(v) && v.length){
-      // 图片：并集去重，任何设备上传的图都保留
-      const curArr = Array.isArray(c) ? c.slice() : [];
-      const seen = new Set(curArr);
-      v.forEach(p => { if(p && !seen.has(p)){ seen.add(p); curArr.push(p); } });
-      out[k] = curArr;
+    if(k === 'photos' && Array.isArray(v)){
+      // v2.2.51 修复：图片不再无条件并集。删除图片必须以时间戳较新的那方 photos 为准，
+      // 否则本地删除的图会被云端旧数据并回来，导致"删完又长出来"。
+      // 同时避免同一次保存后本地 base64 与云端 URL 被并成两张重复显示。
+      // 仅两边都是无时间戳的旧数据（bothOld）或一方缺失时间戳时，才用并集兜底防丢。
+      if(cloudNewer){
+        // 云端较新：采用云端 photos（云端可能已删除图片或替换为 URL）
+        out[k] = v.slice();
+      }else if(localNewer || tu === tv){
+        // 本地较新 或 时间戳相同：保留本地 photos（本地保留 base64，离线可看）
+        // out 已初始化为 cur，无需赋值
+      }else if(bothOld){
+        const curArr = Array.isArray(c) ? c.slice() : [];
+        const seen = new Set(curArr);
+        v.forEach(p => { if(p && !seen.has(p)){ seen.add(p); curArr.push(p); } });
+        out[k] = curArr;
+      }else{
+        const curArr = Array.isArray(c) ? c.slice() : [];
+        const seen = new Set(curArr);
+        v.forEach(p => { if(p && !seen.has(p)){ seen.add(p); curArr.push(p); } });
+        out[k] = curArr;
+      }
       continue;
     }
     if(cloudNewer){
