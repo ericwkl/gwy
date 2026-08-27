@@ -558,7 +558,12 @@ function closeModal(){
   _detailReturnFnMistake=null;
 }
 document.getElementById('modalMask').addEventListener('click', e=>{
-  if(e.target.id==='modalMask') closeModal();
+  if(e.target.id==='modalMask'){
+    // v2.2.50：编辑弹窗（含 input/textarea/select）点遮罩空白处不关闭，防误触丢输入内容；
+    // 纯查看/列表类弹窗（无表单控件）仍支持点遮罩关闭
+    if(document.querySelector('#modalBox input, #modalBox textarea, #modalBox select')) return;
+    closeModal();
+  }
 });
 
 /* ============================================================
@@ -4843,7 +4848,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.49 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.50 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
