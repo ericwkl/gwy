@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
 <div class="app-header">
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.58</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.59</div>
     <div class="app-date" id="headerDate"></div>
     <omitted>
   </div>
@@ -4258,7 +4258,7 @@ async function renderAccu(){
   const seed=getAccuSeed();
   // v2.2.57：缓存带版本号——解析/渲染逻辑升级时手动+1，强制旧版本渲染的缓存 HTML 失效，
   // 防止跨版本复用旧缓存（如 v2.2.55 渲染的【莫此】拆词 HTML 在 v2.2.56 下继续命中）
-  const ACCU_CACHE_VER=3;
+  const ACCU_CACHE_VER=4;
   // 知识库签名：条数+最新更新时间，知识库变化时缓存自动失效
   const kbItems=DB.knowledge||[];
   const kbSig=kbItems.length+'_'+(kbItems.length?Math.max(...kbItems.map(k=>k.updatedAt||0)):0);
@@ -5757,60 +5757,23 @@ function dailyPick(arr, salt, count){
   for(let i=0;i<Math.min(count,len);i++) out.push(sh[(off+i)%len]);
   return out;
 }
-/* v2.2.49：近7天已展示去重抽取——言语素材等"复习型"内容专用。
-   与 dailyPick 的差别：优先抽近7天没展示过的词条（存 DB[storeKey]={d:日期, h:[词条hash]}，仅保留近7天），
-   不足 count 再从全部补。双保险：即使池子小/窗口回绕，7 天内也尽量不重样。 */
+/* v2.2.59：言语素材抽取改为纯确定性算法（与 dailyPick 同源）。
+   根因（跨设备不一致）：旧版依赖设备本地的 accuYySeen（近7天已展示集合）做去重排除，
+   而 accuYySeen 只在本地记录、不上传云端（slimForSync 里 delete）——手机和平板各自积累
+   各自的已展示历史 → 排除集合不同 → 同一天同素材两台设备抽出不同词条。
+   现改为：每天从固定打乱序中取 [off, off+count) 窗口，相邻天窗口错开 count（0 重叠），
+   池子 ≥ 7×count 时天然满足"近7天不重样"。同一素材+同一天+未换批 → 输出完全一致。
+   storeKey 参数保留（不再读写），避免改动调用点。 */
 function pickFresh(arr, salt, count, storeKey){
   if(!arr||!arr.length) return [];
   const sh=seededShuffle(arr, (salt>>>0)||1);
   const len=sh.length;
   if(len<=count) return sh.slice(0, count);
-    const today=todayStr();
-    // 近7天已展示集合（含今天）
-    let seenArr=(DB[storeKey]||[]).filter(s=>{
-      const diff=Math.floor((new Date(today)-new Date(s.d))/86400000);
-      return diff>=0 && diff<7;
-    });
-    const seenSet=new Set();
-    seenArr.forEach(s=>(s.h||[]).forEach(x=>seenSet.add(x)));
-    // v2.2.53 修复：同一天未点换一批（seedCount 相同）时复用当天已抽内容，不再重复消费新词条
-    // （之前每次打开积累页都重新抽 → 当天已展示的 12 条被排除后再抽新的 12 条 → 每次打开内容都变）
-    // v2.2.58 修复：素材重新导入/更新导致部分词条 hash 失效时，保留仍在的词条、只补位缺失的，
-    // 不再整个推倒重抽（否则"重新导入素材→当天批次全变"）
-    const curSeed=DB.accuSeedCount||0;
-    const todayRec=seenArr.find(s=>s.d===today);
-    if(todayRec && todayRec.s===curSeed && todayRec.h&&todayRec.h.length>=count){
-      const byHash=new Map(arr.map(x=>[hashStr(x),x]));
-      const out=todayRec.h.slice(0,count).map(h=>byHash.get(h)).filter(Boolean);
-      if(out.length>=count) return out; // 全部还在 → 完整复用当天批次
-      // 部分词条已不在池中（素材更新/删改）：保留仍有效的，用池中未展示的新词条补位
-      const picked=out.slice();
-      const has=new Set(picked.map(x=>hashStr(x)));
-      const fresh2=sh.filter(x=>!has.has(hashStr(x)) && !seenSet.has(hashStr(x)));
-      for(const x of fresh2){ if(picked.length>=count) break; picked.push(x); }
-      if(picked.length<count){ for(const x of sh){ if(picked.length>=count) break; if(!picked.includes(x)) picked.push(x); } }
-      const hashes=picked.map(x=>hashStr(x));
-      todayRec.h=hashes; todayRec.s=curSeed;
-      DB[storeKey]=seenArr;
-      try{ saveDB(); }catch(e){}
-      return picked;
-    }
-    // 优先近7天未展示的
-    const fresh=sh.filter(x=>!seenSet.has(hashStr(x)));
-    let picked;
-    if(fresh.length>=count){
-      picked=fresh.slice(0, count);
-    }else{
-      picked=[...fresh];
-      for(const x of sh){ if(picked.length>=count) break; if(!picked.includes(x)) picked.push(x); }
-    }
-    // 记录当天展示（覆盖式：记录该 seed 批次的 hash，换一批时覆盖为新批次）
-    const hashes=picked.map(x=>hashStr(x));
-    if(todayRec){ todayRec.h=hashes; todayRec.s=curSeed; }
-    else { seenArr.push({d:today, s:curSeed, h:hashes}); }
-    DB[storeKey]=seenArr;
-    try{ saveDB(); }catch(e){}
-    return picked;
+  const step=count;
+  const off=(((dayIndexOfToday()*step+(DB.accuSeedCount||0)*step+(salt>>>0))%len)+len)%len;
+  const out=[];
+  for(let i=0;i<Math.min(count,len);i++) out.push(sh[(off+i)%len]);
+  return out;
 }
 /* 万能思维体系层级块渲染：合并后的多行块按层级（短冒号行=父级 / "XX（…）：内容"=并列项 / 其余=叶子）
    重建飞书原文档的 "1.2.3. 并列项 → - 子项 → - 子子项" 结构，避免平铺成一坨。 */
