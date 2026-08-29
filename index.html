@@ -304,6 +304,7 @@ img{max-width:100%;display:block;}
 <div class="app-header">
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.52</div>
     <div class="app-date" id="headerDate"></div>
     <omitted>
   </div>
@@ -4000,7 +4001,11 @@ function extractYyWords(kbItems){
       if(!skipping) cleaned.push(t);
     }
     const content=cleaned.filter(Boolean).join('\n');
-    const txt=(k.title||'')+'\n'+content;
+    let txt=(k.title||'')+'\n'+content;
+    // v2.2.52 修复：把"标示 + 具体事物""喻示一般是…"这类无冒号但实为独立词条的行补成"词：释义"，
+    // 避免 re2a 收集例句时把它们误收进前一条（如"国事"）变成子内容。
+    txt=txt.replace(/^([\u4e00-\u9fa5]{2,8}?)\s*\+\s*(.+)$/gm,'$1：$2');
+    txt=txt.replace(/^([\u4e00-\u9fa5]{2,8}?)(一般|是|指|为)\s*(.+)$/gm,'$1：$2$3');
     /* 对比组（易混淆词语）：识别"1. 抵御VS克服""浸润VS渗透VS浸透"式标题（2~7个词），
        把各组各自的释义与例句整对作为一条保留。
        规则：标题行 = 词A VS 词B [VS 词C…]；随后"词：释义"行开始该侧，紧跟的普通行作为该词例句；
@@ -4846,7 +4851,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.51 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.52 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
