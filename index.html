@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
 <div class="app-header">
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.55</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.56</div>
     <div class="app-date" id="headerDate"></div>
     <omitted>
   </div>
@@ -4040,9 +4040,11 @@ function extractYyWords(kbItems){
     // v2.2.52 修复：把"标示 + 具体事物""喻示一般是…"这类无冒号但实为独立词条的行补成"词：释义"，
     // 避免 re2a 收集例句时把它们误收进前一条（如"国事"）变成子内容。
     // v2.2.53 收紧：第二个正则只留"一般/指/为"作为连接词（去掉"是"，因"是"作为动词太常见，会把"铁路是国民经济…"误规范化成"铁路：…"，
-    // 导致 re2a 例句收集误把它当下一词条 break），且要求 group3 不含"："保护标准"X为：…"格式
+    // 导致 re2a 例句收集误把它当下一词条 break），且要求 group3 不含"："保护标准"X为：…"格式。
+    // v2.2.56 修复：再去掉"为"——"X为Y"会把"莫此为甚""惟此为大"等固定词错拆成"X：为Y"（"莫此为甚"→"莫此：为甚"），
+    // 这类无冒号的固定词行走"独立行词条"规则（词一行+释义行）更安全，不会被拆
     txt=txt.replace(/^([\u4e00-\u9fa5]{2,8}?)\s*\+\s*(.+)$/gm,'$1：$2');
-    txt=txt.replace(/^([\u4e00-\u9fa5]{2,8}?)(一般|指|为)\s*([^\n：]+)$/gm,'$1：$2$3');
+    txt=txt.replace(/^([\u4e00-\u9fa5]{2,8}?)(一般|指)\s*([^\n：]+)$/gm,'$1：$2$3');
     /* 对比组（易混淆词语）：识别"1. 抵御VS克服""浸润VS渗透VS浸透"式标题（2~7个词），
        把各组各自的释义与例句整对作为一条保留。
        规则：标题行 = 词A VS 词B [VS 词C…]；随后"词：释义"行开始该侧，紧跟的普通行作为该词例句；
@@ -4166,13 +4168,21 @@ function extractYyWords(kbItems){
     /* 独立行词条（高频词等）：词单独一行，后续行为释义行与（来源）例句行。
        词名取独立行本身（修复旧兜底把下一行短词当词名的错位，如"引擎"被提取成"发动机"）；
        释义行合并展示（pre-wrap 换行），例句行带"例："前缀。 */
+    // v2.2.56：抽出"独立行词条起行条件"供内外层共用——内层收集释义时，当前词已有释义后
+    // 遇到符合条件的无冒号短行（如下一个词条"惟此为大"）视为边界 break，修复多个无冒号词条连排时
+    // 被吞成一条的问题
+    const isStandaloneWordLine=lnRaw=>{
+      const w=lnRaw.replace(/^[【】\s]+|[【】\s]+$/g,'');
+      if(w.length<2||w.length>8) return false;
+      if(/[:：]/.test(w)) return false;               // 含冒号→标准"词：释义"格式
+      if(/[。！？.：；，、]$/.test(w)) return false;     // 不以标点结尾
+      if(/^[（(【\d#*]/.test(w)) return false;          // 不以（/(/【/数字/#* 开头
+      if(/积累$/.test(w)||/^(高频词|易混淆词语|生词|正确搭配|文段积累)$/.test(w)) return false;
+      return true;
+    };
     for(let i=0;i<lines.length-1;i++){
       const cur=lines[i].replace(/^[【】\s]+|[【】\s]+$/g,'');
-      if(cur.length<2||cur.length>8) continue;
-      if(/[:：]/.test(cur)) continue; // v2.2.53 修复：含冒号的行是标准"词：释义"格式，不应走独立行词条规则（避免"嬗变：蜕变、演变"被重复生成为含冒号词名的独立词条）
-      if(/[。！？.：；，、]$/.test(cur)) continue;                 // 词不以标点结尾
-      if(/^[（(【\d#*]/.test(cur)) continue;                      // 不以（/(/【/数字/#* 开头
-      if(/积累$/.test(cur)||/^(高频词|易混淆词语|生词|正确搭配|文段积累)$/.test(cur)) continue;
+      if(!isStandaloneWordLine(cur)) continue;
       if(cur===(k.title||'').trim()||seen.has(cur)) continue;
       if(lines[i].match(pairRe)) continue;                        // 对比组标题（已另行处理）
       let defs=[], exs=[], sawEx=false;
@@ -4181,6 +4191,7 @@ function extractYyWords(kbItems){
         if(lines[j].match(pairRe)) break;                         // 对比组标题
         if(/^[^【】\n：、，。．.；;！!？?\s]{2,12}\s*[：:]/.test(ln)||/^【[^】]+】/.test(ln)) break; // 下一个"词："/【词】条目
         if(/^[一二三四五六七八九十]+[、．.]/.test(ln)||/^（[一二三四五六七八九十\d]+）/.test(ln)) break; // 模块/小节标题
+        if(defs.length && isStandaloneWordLine(ln)) break;       // 下一个无冒号独立词条（已有释义时才判定，避免短释义误判）
         if(/^[（(][^）)]{2,20}[）)]/.test(ln)){ exs.push(ln); sawEx=true; continue; } // （来源）例句
         if(ln.length>=6 && !/^——/.test(ln) && !/^用途[：:]/.test(ln)){ defs.push(ln); continue; } // 释义行
         if(ln.length>=6) continue;
