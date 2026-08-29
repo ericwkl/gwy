@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
 <div class="app-header">
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.52</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.53</div>
     <div class="app-date" id="headerDate"></div>
     <omitted>
   </div>
@@ -4004,8 +4004,10 @@ function extractYyWords(kbItems){
     let txt=(k.title||'')+'\n'+content;
     // v2.2.52 修复：把"标示 + 具体事物""喻示一般是…"这类无冒号但实为独立词条的行补成"词：释义"，
     // 避免 re2a 收集例句时把它们误收进前一条（如"国事"）变成子内容。
+    // v2.2.53 收紧：第二个正则只留"一般/指/为"作为连接词（去掉"是"，因"是"作为动词太常见，会把"铁路是国民经济…"误规范化成"铁路：…"，
+    // 导致 re2a 例句收集误把它当下一词条 break），且要求 group3 不含"："保护标准"X为：…"格式
     txt=txt.replace(/^([\u4e00-\u9fa5]{2,8}?)\s*\+\s*(.+)$/gm,'$1：$2');
-    txt=txt.replace(/^([\u4e00-\u9fa5]{2,8}?)(一般|是|指|为)\s*(.+)$/gm,'$1：$2$3');
+    txt=txt.replace(/^([\u4e00-\u9fa5]{2,8}?)(一般|指|为)\s*([^\n：]+)$/gm,'$1：$2$3');
     /* 对比组（易混淆词语）：识别"1. 抵御VS克服""浸润VS渗透VS浸透"式标题（2~7个词），
        把各组各自的释义与例句整对作为一条保留。
        规则：标题行 = 词A VS 词B [VS 词C…]；随后"词：释义"行开始该侧，紧跟的普通行作为该词例句；
@@ -4022,6 +4024,8 @@ function extractYyWords(kbItems){
       for(let j=i+1;j<lines.length;j++){
         const ln=lines[j];
         if(lines[j].match(pairRe)) break; // 下一个对比组
+        // v2.2.53 修复：行首含"词A VS 词B"格式（即使后面跟释义挤在一行）也视为下一对比组开始，避免被错收为上一组的例句
+        if(/^[一二三四五六七八九十\d.、\s]*[^【】\n：、，。．.；;！!？?\s]{2,12}\s*VS\s*[^【】\n：、，。．.；;！!？?\s]{2,12}/i.test(ln)) break;
         const dm=ln.match(/^([^【】\n：、，。．.；;！!？?\s]{2,12})\s*[：:]\s*(.+)$/);
         const dm2=ln.match(/^【([^】\n]{2,15})】\s*(.+)$/); // 个别组用【词】释义格式
         if(dm||dm2){
@@ -4055,7 +4059,7 @@ function extractYyWords(kbItems){
           continue;
         }
         // 例句：追加到当前侧（≥6字，排除"用途："说明行）
-        if(cur && ln.length>=6 && !/^用途[：:]/.test(ln)) sides[cur].examples.push(ln);
+        if(cur && ln.length>=6 && !/^用途[：:]/.test(ln) && !/^例[：:]/.test(ln) && sides[cur].examples.length<2) sides[cur].examples.push(ln);
       }
       // v2.2.49：同一成语只留一份——对比组优先（辨析信息更全）。
       // 若组内词之前已以单条形式加入 words，先把它顶掉，再 push 对比组，杜绝"不胜枚举"单条+VS组两份重复。
@@ -4130,6 +4134,7 @@ function extractYyWords(kbItems){
     for(let i=0;i<lines.length-1;i++){
       const cur=lines[i].replace(/^[【】\s]+|[【】\s]+$/g,'');
       if(cur.length<2||cur.length>8) continue;
+      if(/[:：]/.test(cur)) continue; // v2.2.53 修复：含冒号的行是标准"词：释义"格式，不应走独立行词条规则（避免"嬗变：蜕变、演变"被重复生成为含冒号词名的独立词条）
       if(/[。！？.：；，、]$/.test(cur)) continue;                 // 词不以标点结尾
       if(/^[（(【\d#*]/.test(cur)) continue;                      // 不以（/(/【/数字/#* 开头
       if(/积累$/.test(cur)||/^(高频词|易混淆词语|生词|正确搭配|文段积累)$/.test(cur)) continue;
@@ -4851,7 +4856,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.52 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.53 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
@@ -5695,31 +5700,39 @@ function pickFresh(arr, salt, count, storeKey){
   const sh=seededShuffle(arr, (salt>>>0)||1);
   const len=sh.length;
   if(len<=count) return sh.slice(0, count);
-  const today=todayStr();
-  // 近7天已展示集合（含今天）
-  let seenArr=(DB[storeKey]||[]).filter(s=>{
-    const diff=Math.floor((new Date(today)-new Date(s.d))/86400000);
-    return diff>=0 && diff<7;
-  });
-  const seenSet=new Set();
-  seenArr.forEach(s=>(s.h||[]).forEach(x=>seenSet.add(x)));
-  // 优先近7天未展示的
-  const fresh=sh.filter(x=>!seenSet.has(hashStr(x)));
-  let picked;
-  if(fresh.length>=count){
-    picked=fresh.slice(0, count);
-  }else{
-    picked=[...fresh];
-    for(const x of sh){ if(picked.length>=count) break; if(!picked.includes(x)) picked.push(x); }
-  }
-  // 记录当天展示（同一天多次调用=换一批，累加）
-  const todayRec=seenArr.find(s=>s.d===today);
-  const hashes=picked.map(x=>hashStr(x));
-  if(todayRec){ todayRec.h=[...new Set([...todayRec.h, ...hashes])]; }
-  else { seenArr.push({d:today, h:hashes}); }
-  DB[storeKey]=seenArr;
-  try{ saveDB(); }catch(e){}
-  return picked;
+    const today=todayStr();
+    // 近7天已展示集合（含今天）
+    let seenArr=(DB[storeKey]||[]).filter(s=>{
+      const diff=Math.floor((new Date(today)-new Date(s.d))/86400000);
+      return diff>=0 && diff<7;
+    });
+    const seenSet=new Set();
+    seenArr.forEach(s=>(s.h||[]).forEach(x=>seenSet.add(x)));
+    // v2.2.53 修复：同一天未点换一批（seedCount 相同）时复用当天已抽内容，不再重复消费新词条
+    // （之前每次打开积累页都重新抽 → 当天已展示的 12 条被排除后再抽新的 12 条 → 每次打开内容都变）
+    const curSeed=DB.accuSeedCount||0;
+    const todayRec=seenArr.find(s=>s.d===today);
+    if(todayRec && todayRec.s===curSeed && todayRec.h&&todayRec.h.length>=count){
+      const byHash=new Map(arr.map(x=>[hashStr(x),x]));
+      const out=todayRec.h.slice(0,count).map(h=>byHash.get(h)).filter(Boolean);
+      if(out.length>=count) return out;
+    }
+    // 优先近7天未展示的
+    const fresh=sh.filter(x=>!seenSet.has(hashStr(x)));
+    let picked;
+    if(fresh.length>=count){
+      picked=fresh.slice(0, count);
+    }else{
+      picked=[...fresh];
+      for(const x of sh){ if(picked.length>=count) break; if(!picked.includes(x)) picked.push(x); }
+    }
+    // 记录当天展示（覆盖式：记录该 seed 批次的 hash，换一批时覆盖为新批次）
+    const hashes=picked.map(x=>hashStr(x));
+    if(todayRec){ todayRec.h=hashes; todayRec.s=curSeed; }
+    else { seenArr.push({d:today, s:curSeed, h:hashes}); }
+    DB[storeKey]=seenArr;
+    try{ saveDB(); }catch(e){}
+    return picked;
 }
 /* 万能思维体系层级块渲染：合并后的多行块按层级（短冒号行=父级 / "XX（…）：内容"=并列项 / 其余=叶子）
    重建飞书原文档的 "1.2.3. 并列项 → - 子项 → - 子子项" 结构，避免平铺成一坨。 */
