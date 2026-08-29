@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
 <div class="app-header">
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.53</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.55</div>
     <div class="app-date" id="headerDate"></div>
     <omitted>
   </div>
@@ -1861,7 +1861,7 @@ function recordModal(moduleKey, id){
   const isSy = mod.group==='sy'; // 申论/面试：不按正确数/正确率衡量
   let rec = null;
   if(id) rec = DB.records.find(r=>r.id===id);
-  openModal(`<div class="modal-head"><h3>${id?'修改':'录入'}刷题数据</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
+  openModal(`<div class="modal-head"><h3>${id?'修改':'录入'}刷题数据</h3><button class="modal-close" onclick="cancelRecordEdit()">✕</button></div>
     <div style="font-size:12px;color:var(--text-soft);margin-bottom:10px;">板块：${mod.icon} ${mod.name}${isSy?'（申论与面试：记录练习内容与用时）':''}</div>
     ${mod.subs&&mod.subs.length?`<div class="form-group"><label>子模块</label><select id="rc_sub">
       <option value="">不指定</option>
@@ -1881,7 +1881,7 @@ function recordModal(moduleKey, id){
     <div style="font-size:11px;color:var(--text-light);">问题和改进方法保存后会自动同步到「知识库」对应分类，方便复习。</div>
     <div class="modal-foot">
       ${id?`<button class="btn btn-danger" style="flex:1" onclick="delRecord('${id}')">删除</button>`:''}
-      <button class="btn btn-outline" style="flex:1" onclick="closeModal()">取消</button>
+      <button class="btn btn-outline" style="flex:1" onclick="cancelRecordEdit()">取消</button>
       <button class="btn" style="flex:1" onclick="saveRecord('${moduleKey}','${id||''}')">保存</button>
     </div>`);
 }
@@ -1913,7 +1913,10 @@ function saveRecord(moduleKey,id){
     DB.records.push(nr);
     syncRecordToMistakes(moduleKey, nr);
   }
-  saveDB(); closeModal(); renderStudy(); toast('已保存');
+  saveDB(); closeModal();
+  if(_histReturn && _histReturn.moduleKey===moduleKey){ showRecordHistory(moduleKey); }
+  else{ renderStudy(); }
+  toast('已保存');
 }
 /* 把刷题记录的问题+改进方法自动同步到易错考点管理（mistakes 数组，而非 knowledge） */
 function syncRecordToMistakes(moduleKey, rec){
@@ -2019,7 +2022,9 @@ function delRecord(id){
   if(!confirm('删除此记录？')) return;
   markDeleted('records', id);
   DB.records=DB.records.filter(r=>r.id!==id);
-  saveDB(); closeModal(); renderStudy();
+  saveDB(); closeModal();
+  if(_histReturn){ showRecordHistory(_histReturn.moduleKey); }
+  else{ renderStudy(); }
 }
 
 /* ============================================================
@@ -2756,15 +2761,17 @@ function renderStudyProgressList(){
   const list=DB.studyProgress||[];
   if(!list.length) return '<div class="empty-state" style="padding:14px 0;color:var(--text-light);font-size:12px;">还没有刷题进度，点"+ 录入"添加</div>';
   const byMod={};
-  list.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||'')).forEach(p=>{
+  list.forEach(p=>{
     const m=MODULES.find(x=>x.key===p.module);
-    const k=(m?m.name:p.module)+' / '+(p.sub||'通用');
+    const k=m?m.key:(p.module||'other');
     (byMod[k]=byMod[k]||[]).push(p);
   });
-  return Object.entries(byMod).map(([grp,arr])=>`<div style="margin-bottom:8px;">
-    <div style="font-size:12px;font-weight:600;color:var(--text-soft);margin-bottom:4px;">${escapeHtml(grp)}</div>
-    ${arr.map(p=>`<div style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--bg-soft);border-radius:8px;margin-bottom:4px;font-size:12px;">
+  // 每个模块组内按日期倒序（新录入在上）
+  Object.values(byMod).forEach(arr=>arr.sort((a,b)=>(b.date||'').localeCompare(a.date||'')));
+  // v2.2.55：按模块大类整合——子模块不再单独成组，改为行内标签；模块顺序固定（数量→资料→判断→言语→政治→常识→申论→综合→面试），不随录入时间变化
+  const item=p=>`<div style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--bg-soft);border-radius:8px;margin-bottom:4px;font-size:12px;">
       <span style="flex:1;min-width:0;">
+        ${p.sub?`<span style="font-size:10px;padding:1px 6px;border-radius:8px;background:var(--primary-soft);color:var(--primary);margin-right:6px;">${escapeHtml(p.sub)}</span>`:''}
         <span style="color:var(--text);">${escapeHtml(p.book||'(无题本)')}</span>
         <span style="color:var(--accent);margin-left:6px;">${escapeHtml(p.status||'')}</span>
         ${p.note?`<div style="font-size:11px;color:var(--text-soft);margin-top:2px;">${escapeHtml(p.note)}</div>`:''}
@@ -2772,16 +2779,30 @@ function renderStudyProgressList(){
       <span style="font-size:10px;color:var(--text-light);">${p.date||''}</span>
       <button class="m-rec-btn" onclick="studyProgressModal('${p.id}')">✏️</button>
       <button class="m-rec-btn" onclick="if(confirm('删除？')){DB.studyProgress=DB.studyProgress.filter(x=>x.id!=='${p.id}');saveDB();renderStudy();}">✕</button>
-    </div>`).join('')}
-  </div>`).join('');
+    </div>`;
+  const modBlock=m=>{
+    const arr=byMod[m.key]||[];
+    if(!arr.length) return '';
+    return `<div style="margin-bottom:8px;">
+      <div style="font-size:12px;font-weight:600;color:var(--text-soft);margin-bottom:4px;">${m.icon} ${m.name}<span style="font-weight:400;color:var(--text-light);margin-left:4px;">${arr.length}</span></div>
+      ${arr.map(item).join('')}
+    </div>`;
+  };
+  // 按试卷排布顺序（国考行政执法卷）：政治理论→常识→言语→数量→判断→资料；申论/综合/面试在后
+  const order=['zzll','cs','yy','sl','pd','zl','sl2','zh','ms'];
+  const mods=order.map(k=>MODULES.find(x=>x.key===k)).filter(Boolean);
+  const others=Object.keys(byMod).filter(k=>!MODULES.some(m=>m.key===k));
+  return mods.map(modBlock).join('')
+    + (others.length?`<div style="margin-bottom:6px;">${others.map(k=>`<div style="font-size:12px;font-weight:600;color:var(--text-soft);margin-bottom:4px;">${escapeHtml(k)}<span style="font-weight:400;color:var(--text-light);margin-left:4px;">${byMod[k].length}</span></div>${byMod[k].map(item).join('')}</div>`).join('')}</div>`:'');
 }
 
 /* 学习模块历史记录查看弹窗 */
+let _histReturn=null; // v2.2.54 {moduleKey,top} 从历史弹窗进编辑，返回时恢复到原滚动位置
 function showRecordHistory(moduleKey){
   const m=MODULES.find(x=>x.key===moduleKey);
   const list=(DB.records||[]).filter(r=>r.module===moduleKey).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   openModal(`<div class="modal-head"><h3>📜 ${m?m.icon+' '+m.name:'该模块'}历史刷题记录</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
-    <div style="max-height:60vh;overflow-y:auto;">
+    <div id="histScroll" style="max-height:60vh;overflow-y:auto;">
       ${list.length?list.map(r=>`<div style="padding:8px;border-bottom:1px solid var(--border);">
         <div style="display:flex;align-items:center;gap:6px;">
           <span style="font-weight:600;font-size:13px;">${r.date||'无日期'}</span>
@@ -2791,14 +2812,28 @@ function showRecordHistory(moduleKey){
         ${r.question?`<div style="font-size:11px;color:var(--text);margin-top:4px;white-space:pre-wrap;background:var(--bg-soft);padding:6px;border-radius:6px;">${escapeHtml(r.question)}</div>`:''}
         ${r.improve?`<div style="font-size:11px;color:var(--text-soft);margin-top:4px;white-space:pre-wrap;">💡 ${escapeHtml(r.improve)}</div>`:''}
         <div style="margin-top:4px;display:flex;gap:6px;">
-          <button class="btn btn-sm btn-outline" onclick="closeModal();recordModal('${moduleKey}','${r.id}')">编辑</button>
-          <button class="btn btn-sm" style="background:var(--danger);color:#fff;" onclick="if(confirm('删除此记录？')){DB.records=DB.records.filter(x=>x.id!=='${r.id}');saveDB();showRecordHistory('${moduleKey}');}">删除</button>
+          <button class="btn btn-sm btn-outline" onclick="editFromHist('${moduleKey}','${r.id}')">编辑</button>
+          <button class="btn btn-sm" style="background:var(--danger);color:#fff;" onclick="if(confirm('删除此记录？')){DB.records=DB.records.filter(x=>x.id!=='${r.id}');saveDB();var _sc=document.getElementById('histScroll');_histReturn={moduleKey:'${moduleKey}',top:_sc?_sc.scrollTop:0};showRecordHistory('${moduleKey}');}">删除</button>
         </div>
       </div>`).join(''):'<div class="empty-state">该模块还没有记录</div>'}
     </div>
     <div class="modal-foot">
       <button class="btn btn-outline" style="flex:1" onclick="closeModal()">关闭</button>
     </div>`);
+  if(_histReturn && _histReturn.moduleKey===moduleKey){
+    setTimeout(()=>{ const sc=document.getElementById('histScroll'); if(sc) sc.scrollTop=_histReturn.top; _histReturn=null; },30);
+  }
+}
+/* v2.2.54：历史弹窗内点编辑 → 记录滚动位置后无缝切换到编辑弹窗，保存/取消/删除后回到原位置 */
+function editFromHist(moduleKey,id){
+  const sc=document.getElementById('histScroll');
+  _histReturn={moduleKey, top:sc?sc.scrollTop:0};
+  recordModal(moduleKey,id);
+}
+function cancelRecordEdit(){
+  const h=_histReturn;
+  closeModal();
+  if(h) showRecordHistory(h.moduleKey);
 }
 
 /* 导出刷题记录为 Excel（与导入格式对应） */
