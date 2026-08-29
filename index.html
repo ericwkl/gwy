@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
 <div class="app-header">
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.59</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.61</div>
     <div class="app-date" id="headerDate"></div>
     <omitted>
   </div>
@@ -4015,7 +4015,7 @@ const ACCU_CATS = [
 let kbCat='常识';
 /* 提取言语素材词条（复用推送页解析逻辑） */
 function extractYyWords(kbItems){
-  const words=[]; const seen=new Set();
+  const words=[]; const seen=new Set(); const exampleLines=new Set(); // v2.2.61: 记录 re2a 已收为"例："的行，供 re2b 跳过
   kbItems.forEach(k=>{
     /* 剔除"文段积累""正确搭配"模块（与"高频词/易混淆词语"并列的独立模块：文段积累=整段文段、正确搭配=杂句搭配，都不是词条）：
        从模块标题行开始跳过，直到下一个模块标题（一、/（一）/编号词条/已知模块名）或文档结尾 */
@@ -4044,7 +4044,14 @@ function extractYyWords(kbItems){
     // v2.2.56 修复：再去掉"为"——"X为Y"会把"莫此为甚""惟此为大"等固定词错拆成"X：为Y"（"莫此为甚"→"莫此：为甚"），
     // 这类无冒号的固定词行走"独立行词条"规则（词一行+释义行）更安全，不会被拆
     txt=txt.replace(/^([\u4e00-\u9fa5]{2,8}?)\s*\+\s*(.+)$/gm,'$1：$2');
-    txt=txt.replace(/^([\u4e00-\u9fa5]{2,8}?)(一般|指)\s*([^\n：]+)$/gm,'$1：$2$3');
+    // v2.2.60：扩展无冒号释义连接词。用户反馈"始终不渝"等词导入后只剩例子，
+    // 常见原因是飞书复制时冒号丢失或原格式就是"词 指/形容/比喻...释义"，
+    // 先统一规范成"词：指/形容/比喻...释义"，让 re2a 能正确收释义。
+    // v2.2.61 修复：词名不能以"是/为/有/在/与/的/了"结尾，避免"项目化学习是指..."被错拆成"项目化学习是：指..."。
+    const defConn='指|一般|表示|形容|比喻|意为|意思是|即|谓|称|通常|多指|特指|泛指';
+    const skipTailRe=/(是|为|有|在|与|的|了)$/;
+    txt=txt.replace(new RegExp('^([\\u4e00-\\u9fa5]{2,8})('+defConn+')\\s*([^\\n：]+)$','gm'),(m,w,conn,rest)=>skipTailRe.test(w)?m:(w+'：'+conn+rest));
+    txt=txt.replace(new RegExp('^(\\d+[.、]\\s*)([\\u4e00-\\u9fa5]{2,8})\\s*('+defConn+')\\s*([^\\n：]+)$','gm'),(m,num,w,conn,rest)=>skipTailRe.test(w)?m:(num+w+'：'+conn+rest));
     /* 对比组（易混淆词语）：识别"1. 抵御VS克服""浸润VS渗透VS浸透"式标题（2~7个词），
        把各组各自的释义与例句整对作为一条保留。
        规则：标题行 = 词A VS 词B [VS 词C…]；随后"词：释义"行开始该侧，紧跟的普通行作为该词例句；
@@ -4154,15 +4161,19 @@ function extractYyWords(kbItems){
         let s='【'+word+'】'+body.slice(0,120);
         if(exs.length) s+='\n例：'+exs.slice(0,2).join('\n例：');
         // 把例句行也加入 seen，防止 re2b 把诗当独立词条
-        exs.slice(0,2).forEach(e=>{ const ek=e.slice(0,40); if(!seen.has(ek)) seen.add(ek); });
+        exs.slice(0,2).forEach(e=>{ const ek=e.slice(0,40); if(!seen.has(ek)) seen.add(ek); exampleLines.add(e); }); // v2.2.61: 同时记录完整例句行
         words.push(s);
       }
     }
     // 长句（词名 >8 字，多为某词条的例句/长内容，如"梳理百年党史让人留下深刻记忆：…"）：
     // 原样保留、不再误加【】当独立词条
+    // v2.2.61 修复：若长句已被 re2a 收为某个词条的"例："，跳过，避免"始终不渝"等词条出现"只有例子"的独立条目
     const re2b=/(?:^|\n)([^】\n：、，]{9,40})[:：]\s*([^\n]{2,150})/g;
     while((m=re2b.exec(txt))){
       const whole=m[0].trim();
+      let isEx=false;
+      for(const ex of exampleLines){ if(whole.startsWith(ex) || ex.startsWith(whole)){ isEx=true; break; } }
+      if(isEx) continue;
       if(!seen.has(whole)){ seen.add(whole); words.push(whole.slice(0,160)); }
     }
     /* 独立行词条（高频词等）：词单独一行，后续行为释义行与（来源）例句行。
@@ -4258,7 +4269,7 @@ async function renderAccu(){
   const seed=getAccuSeed();
   // v2.2.57：缓存带版本号——解析/渲染逻辑升级时手动+1，强制旧版本渲染的缓存 HTML 失效，
   // 防止跨版本复用旧缓存（如 v2.2.55 渲染的【莫此】拆词 HTML 在 v2.2.56 下继续命中）
-  const ACCU_CACHE_VER=4;
+  const ACCU_CACHE_VER=6;
   // 知识库签名：条数+最新更新时间，知识库变化时缓存自动失效
   const kbItems=DB.knowledge||[];
   const kbSig=kbItems.length+'_'+(kbItems.length?Math.max(...kbItems.map(k=>k.updatedAt||0)):0);
