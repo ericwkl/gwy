@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
 <div class="app-header">
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.56</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.58</div>
     <div class="app-date" id="headerDate"></div>
     <omitted>
   </div>
@@ -4180,18 +4180,34 @@ function extractYyWords(kbItems){
       if(/积累$/.test(w)||/^(高频词|易混淆词语|生词|正确搭配|文段积累)$/.test(w)) return false;
       return true;
     };
-    for(let i=0;i<lines.length-1;i++){
-      const cur=lines[i].replace(/^[【】\s]+|[【】\s]+$/g,'');
+    for(let i=0;i<lines.length;i++){ // 遍历到末行：空格分隔词条自带释义，最后一行也可成词条
+      let cur=lines[i].replace(/^[【】\s]+|[【】\s]+$/g,'');
+      let inlineRest=null;
+      // v2.2.57：空格分隔"词 释义"单行（如"莫此为甚 对比凸显这件事最恶劣、最过分"）。
+      // v2.2.56 去掉"为"连接词后这类行不再被拆词（修复了【莫此】），但整行因超长被独立行词条
+      // 跳过 → 词条直接消失。这里拆出 2~8 字词名，同行剩余部分作为第一段释义。
+      // 排除"强调/指出/表示…"等常见引述动词开头，避免把句子误当词条（如"习近平总书记 强调 要…"）。
+      if(!isStandaloneWordLine(cur)){
+        const sm=cur.match(/^([\u4e00-\u9fa5]{2,8})\s+(.+)$/);
+        if(sm && isStandaloneWordLine(sm[1]) && sm[2].trim().length>=6 && !/^(强调|指出|表示|认为|提出|要求|提到|呼吁|强调说|指出说)\s/.test(sm[2].trim())){
+          inlineRest=sm[2].trim(); cur=sm[1];
+        }
+      }
       if(!isStandaloneWordLine(cur)) continue;
       if(cur===(k.title||'').trim()||seen.has(cur)) continue;
       if(lines[i].match(pairRe)) continue;                        // 对比组标题（已另行处理）
       let defs=[], exs=[], sawEx=false;
+      if(inlineRest) defs.push(inlineRest);
       for(let j=i+1;j<lines.length;j++){
         const ln=lines[j];
         if(lines[j].match(pairRe)) break;                         // 对比组标题
         if(/^[^【】\n：、，。．.；;！!？?\s]{2,12}\s*[：:]/.test(ln)||/^【[^】]+】/.test(ln)) break; // 下一个"词："/【词】条目
         if(/^[一二三四五六七八九十]+[、．.]/.test(ln)||/^（[一二三四五六七八九十\d]+）/.test(ln)) break; // 模块/小节标题
-        if(defs.length && isStandaloneWordLine(ln)) break;       // 下一个无冒号独立词条（已有释义时才判定，避免短释义误判）
+        if(defs.length){
+          // 下一个词条边界：无冒号独立词条 或 空格分隔"词 释义"单行（词名 2~8 字纯汉字）
+          const isNext=isStandaloneWordLine(ln)||((sm2=>!!(sm2&&isStandaloneWordLine(sm2[1])))(ln.match(/^([\u4e00-\u9fa5]{2,8})\s+.+$/)));
+          if(isNext) break;
+        }
         if(/^[（(][^）)]{2,20}[）)]/.test(ln)){ exs.push(ln); sawEx=true; continue; } // （来源）例句
         if(ln.length>=6 && !/^——/.test(ln) && !/^用途[：:]/.test(ln)){ defs.push(ln); continue; } // 释义行
         if(ln.length>=6) continue;
@@ -4205,7 +4221,7 @@ function extractYyWords(kbItems){
         s+='\n'+defs.join('\n');
         if(exs.length) s+='\n例：'+exs.slice(0,2).join('\n例：');
         words.push(s);
-        i+=defs.length+exs.length; // 跳过已消费的行
+        i+=(inlineRest?defs.length-1:defs.length)+exs.length; // 跳过已消费的行（inlineRest 首段释义在词名同一行）
       }
     }
   });
@@ -4240,11 +4256,14 @@ function renderSettingsKBList(){
    只有点"换一批"（accuRefresh）或新一天才会清除缓存重新渲染。 */
 async function renderAccu(){
   const seed=getAccuSeed();
+  // v2.2.57：缓存带版本号——解析/渲染逻辑升级时手动+1，强制旧版本渲染的缓存 HTML 失效，
+  // 防止跨版本复用旧缓存（如 v2.2.55 渲染的【莫此】拆词 HTML 在 v2.2.56 下继续命中）
+  const ACCU_CACHE_VER=3;
   // 知识库签名：条数+最新更新时间，知识库变化时缓存自动失效
   const kbItems=DB.knowledge||[];
   const kbSig=kbItems.length+'_'+(kbItems.length?Math.max(...kbItems.map(k=>k.updatedAt||0)):0);
-  // 缓存命中：种子相同+知识库签名相同，才用缓存（防止知识库变化后仍显示旧缓存）
-  if(DB.accuHtmlCache && DB.accuHtmlCache.seed===seed && DB.accuHtmlCache.kbSig===kbSig && DB.accuHtmlCache.html){
+  // 缓存命中：种子相同+知识库签名相同+版本一致，才用缓存（防止知识库变化后仍显示旧缓存）
+  if(DB.accuHtmlCache && DB.accuHtmlCache.ver===ACCU_CACHE_VER && DB.accuHtmlCache.seed===seed && DB.accuHtmlCache.kbSig===kbSig && DB.accuHtmlCache.html){
     const el=document.getElementById('page-accu');
     if(el){ el.innerHTML=DB.accuHtmlCache.html; return; }
   }
@@ -4525,7 +4544,7 @@ async function renderAccu(){
     ${cards}`;
   document.getElementById('page-accu').innerHTML=accuHtml;
   // 缓存渲染结果（同一天+同一刷新次数+知识库不变时不重新渲染）
-  DB.accuHtmlCache={seed:seed, kbSig:kbSig, html:accuHtml};
+  DB.accuHtmlCache={ver:ACCU_CACHE_VER, seed:seed, kbSig:kbSig, html:accuHtml};
   saveDB();
 }
 function setKbCat(c){
@@ -5756,12 +5775,25 @@ function pickFresh(arr, salt, count, storeKey){
     seenArr.forEach(s=>(s.h||[]).forEach(x=>seenSet.add(x)));
     // v2.2.53 修复：同一天未点换一批（seedCount 相同）时复用当天已抽内容，不再重复消费新词条
     // （之前每次打开积累页都重新抽 → 当天已展示的 12 条被排除后再抽新的 12 条 → 每次打开内容都变）
+    // v2.2.58 修复：素材重新导入/更新导致部分词条 hash 失效时，保留仍在的词条、只补位缺失的，
+    // 不再整个推倒重抽（否则"重新导入素材→当天批次全变"）
     const curSeed=DB.accuSeedCount||0;
     const todayRec=seenArr.find(s=>s.d===today);
     if(todayRec && todayRec.s===curSeed && todayRec.h&&todayRec.h.length>=count){
       const byHash=new Map(arr.map(x=>[hashStr(x),x]));
       const out=todayRec.h.slice(0,count).map(h=>byHash.get(h)).filter(Boolean);
-      if(out.length>=count) return out;
+      if(out.length>=count) return out; // 全部还在 → 完整复用当天批次
+      // 部分词条已不在池中（素材更新/删改）：保留仍有效的，用池中未展示的新词条补位
+      const picked=out.slice();
+      const has=new Set(picked.map(x=>hashStr(x)));
+      const fresh2=sh.filter(x=>!has.has(hashStr(x)) && !seenSet.has(hashStr(x)));
+      for(const x of fresh2){ if(picked.length>=count) break; picked.push(x); }
+      if(picked.length<count){ for(const x of sh){ if(picked.length>=count) break; if(!picked.includes(x)) picked.push(x); } }
+      const hashes=picked.map(x=>hashStr(x));
+      todayRec.h=hashes; todayRec.s=curSeed;
+      DB[storeKey]=seenArr;
+      try{ saveDB(); }catch(e){}
+      return picked;
     }
     // 优先近7天未展示的
     const fresh=sh.filter(x=>!seenSet.has(hashStr(x)));
