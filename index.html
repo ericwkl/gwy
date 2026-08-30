@@ -1122,7 +1122,9 @@ function resetWeekDoneIfNeeded(monday){
     (DB.weekTasks||[]).forEach(t=>{
       if(t.done){
         t.done=false;
-        t.updatedAt=Date.now();
+        // v2.2.62：重置不更新 updatedAt——重置是本地业务动作（每周一自动擦勾），
+        // 不是用户编辑。更新会让 done=false 携带"最新时间戳"顶替另一台设备已勾选
+        // 的 done=true（updatedAt 更旧）在合并中获胜，导致跨设备吞勾。
         changed=true;
       }
     });
@@ -6808,7 +6810,14 @@ function mergeWeekTasks(a, b){
     if(x&&x.id){
       const cur = map.get(x.id);
       if(!cur){ map.set(x.id, x); }
-      else map.set(x.id, mergeObjFields(cur, x)); // v2.1.81: 改为字段级时间戳合并
+      else{
+        const merged = mergeObjFields(cur, x);
+        // v2.2.62：勾选状态（done）只增不减——任一方已勾选则合并后勾选。
+        // 修复 resetWeekDoneIfNeeded 用 updatedAt=now 的重置（done=false）顶替
+        // 手机/平板已勾选（done=true）在跨设备合并中获胜、吞掉用户勾选的 bug。
+        merged.done = !!(cur.done || x.done);
+        map.set(x.id, merged);
+      }
     }
   });
   return [...map.values()];
