@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
 <div class="app-header">
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.62</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.63</div>
     <div class="app-date" id="headerDate"></div>
     <omitted>
   </div>
@@ -1118,9 +1118,12 @@ function resetWeekDoneIfNeeded(monday){
   const mondayStr=localDateStr(monday);
   if(!DB.settings) DB.settings={};
   if(DB.settings.lastWeekMonday !== mondayStr){
+    // v2.2.63：只清"上周"的勾（updatedAt 早于本周一 00:00），保留本周新勾，
+    // 避免把用户本周刚勾的 done=true 误清。无时间戳(0)视为旧勾一并清。
+    const weekStartTs=new Date(monday.getFullYear(), monday.getMonth(), monday.getDate()).getTime();
     let changed=false;
     (DB.weekTasks||[]).forEach(t=>{
-      if(t.done){
+      if(t.done && (t.updatedAt||0) < weekStartTs){
         t.done=false;
         // v2.2.62：重置不更新 updatedAt——重置是本地业务动作（每周一自动擦勾），
         // 不是用户编辑。更新会让 done=false 携带"最新时间戳"顶替另一台设备已勾选
@@ -1129,7 +1132,7 @@ function resetWeekDoneIfNeeded(monday){
       }
     });
     DB.settings.lastWeekMonday=mondayStr;
-    if(changed) saveDB();
+    if(changed){ saveDB(); syncPush(); } // v2.2.63: 清零后立即推送上云，防止云端旧勾被 pull 并回
   }
 }
 /* 周计划：横向星期选择（今天默认选中），下方显示当天任务 */
@@ -4934,7 +4937,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.62 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · v2.2.63 · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
@@ -6926,6 +6929,17 @@ async function _syncPullAndMergeInner(){
       localStorage.setItem('gk_workbench_v1_local_backup_' + getSyncKey(), backup);
     }catch(e){}
     const cloud = data.data || {};
+    // v2.2.63：云端已进入新周（lastWeekMonday===本周一）时，先清洗两端"上周勾"（done=true 且
+    // updatedAt 早于本周一 00:00），再走合并。否则 mergeWeekTasks 的"勾只增不减"会把云端/本地上周
+    // 的 done=true 并回，抵消每周 reset 的自动清零（v2.2.62 修吞勾引入的副作用：新周勾清不掉）。
+    const _cnw=new Date(), _cwi=_cnw.getDay();
+    const _cmon=new Date(_cnw); _cmon.setDate(_cnw.getDate()-(_cwi===0?6:_cwi-1));
+    const _cweekStartTs=new Date(_cmon.getFullYear(),_cmon.getMonth(),_cmon.getDate()).getTime();
+    const _cloudInNewWeek=!!(cloud.settings && cloud.settings.lastWeekMonday===localDateStr(_cmon));
+    if(_cloudInNewWeek){
+      (DB.weekTasks||[]).forEach(t=>{ if(t.done && (t.updatedAt||0)<_cweekStartTs) t.done=false; });
+      (cloud.weekTasks||[]).forEach(t=>{ if(t.done && (t.updatedAt||0)<_cweekStartTs) t.done=false; });
+    }
     const merged = mergeLocalCloud(DB, cloud);
     DB = merged;
     if(!Array.isArray(DB.weekTasks)) DB.weekTasks=[];
