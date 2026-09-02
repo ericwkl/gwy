@@ -304,7 +304,7 @@ img{max-width:100%;display:block;}
 <div class="app-header">
   <div class="header-left">
     <div class="app-title">📚 公考学习工作台</div>
-    <div style="font-size:10px;color:var(--text-light);margin-top:2px;">v2.2.63</div>
+    <div style="font-size:10px;color:var(--text-light);margin-top:2px;" id="appVersionBadge"></div>
     <div class="app-date" id="headerDate"></div>
     <omitted>
   </div>
@@ -4157,6 +4157,8 @@ function extractYyWords(kbItems){
         let exs=[];
         for(const ln of after){
           if(/^[【]?[^】\n：、，\d]{2,8}[】]?[:：]/.test(ln) && !/诗云|诗曰|曰|云[：:]/.test(ln)) break; // 下一个"词：释义"（排除"张旭诗云："等引诗冒号）
+          // v2.2.64：VS 对比组标题也是边界，否则单条成语（如蔚然成风）后会错把"食古不化VS照本宣科"收为例句
+          if(/^[一二三四五六七八九十\d.、\s]*[^【】\n：、，。．.；;！!？?\s]{2,12}\s*VS\s*[^【】\n：、，。．.；;！!？?\s]{2,12}/i.test(ln)) break;
           if(/^\d+[.、]\s*\S/.test(ln)) break;                          // 下一个编号词条
           if(/^[一二三四五六七八九十]+[、．.]/.test(ln)) break;          // 模块标题
           if(/^（[一二三四五六七八九十\d]+）/.test(ln)) break;           // 小节标题
@@ -4937,7 +4939,7 @@ function renderSettings(){
       </div>
     </div>
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
-      公考学习工作台 · v2.2.63 · 数据本地存储<br>祝备考顺利，成功上岸
+      公考学习工作台 · ${APP_VERSION} · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
 }
 /* 易错考点操作 */
@@ -6235,8 +6237,12 @@ function restoreScrollPos(page){
     }
   }catch(e){}
 }
+/* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
+   改版本号只需改这一处，不再 grep 多处硬编码 */
+const APP_VERSION='v2.2.64';
 function init(){
   loadDB();
+  const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
   // 一次性去重：清理历史导入产生的重复考点（保留复习轮次更多的）
   if(!DB._mistakeDeduped){
     dedupMistakes();
