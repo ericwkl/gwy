@@ -1883,7 +1883,7 @@ function recordModal(moduleKey, id){
     </div>`}
     <div class="form-group"><label>❓ 问题</label><textarea id="rc_question" placeholder="本次做题暴露的问题…">${rec&&rec.question?escapeHtml(rec.question):''}</textarea></div>
     <div class="form-group"><label>💡 改进方法</label><textarea id="rc_improve" placeholder="针对问题的改进方法…">${rec&&rec.improve?escapeHtml(rec.improve):''}</textarea></div>
-    <div style="font-size:11px;color:var(--text-light);">问题和改进方法保存后会自动同步到「知识库」对应分类，方便复习。</div>
+    <div style="font-size:11px;color:var(--text-light);">问题和改进方法保存后会自动同步到「易错考点」对应模块，方便复习。</div>
     <div class="modal-foot">
       ${id?`<button class="btn btn-danger" style="flex:1" onclick="delRecord('${id}')">删除</button>`:''}
       <button class="btn btn-outline" style="flex:1" onclick="cancelRecordEdit()">取消</button>
@@ -2492,7 +2492,9 @@ async function importErrorExcel(input){
   toast('正在解析Excel...');
   try{
     if(!window.XLSX){
-      await loadScript('https://cdn.bootcdn.net/ajax/libs/xlsx/0.18.5/xlsx.full.min.js');
+      // v2.2.67：改多源兜底（bootcdn/jsdelivr/unpkg 轮换），单一 CDN 失败不再导致"解析失败：undefined"
+      const ok=await loadXlsxLib();
+      if(!ok){ toast('表格解析库加载失败，请检查网络后重试'); return; }
     }
     const arrayBuffer=await file.arrayBuffer();
     const wb=XLSX.read(arrayBuffer,{type:'array'});
@@ -2597,12 +2599,13 @@ async function importErrorExcel(input){
     const imgCount=DB.errors.reduce((s,e)=>s+(e.photos||[]).length,0);
     toast(imgCount>0 ? (overwrite?`已覆盖导入${imported}条错题（含${imgCount}张截图）`:`已导入${imported}条错题（含${imgCount}张截图）`) : (overwrite?`已覆盖导入${imported}条错题`:`已导入${imported}条错题`));
   }catch(err){
-    toast('解析失败：'+err.message);
+    // v2.2.67：loadScript 失败 reject 出来的是 Event（无 message），会显示"解析失败：undefined"——兜底成人话
+    toast('解析失败：'+(err&&err.message?err.message:'表格解析库加载失败或文件格式不支持，请检查网络后重试'));
     console.error(err);
   }
 }
 
-/* 导入"行测刷题记录"Excel：每行→刷题记录(records)，问题+改进方法自动同步知识库(knowledge)
+/* 导入"行测刷题记录"Excel：每行→刷题记录(records)，问题+改进方法自动同步到易错考点(mistakes，非 knowledge)
    支持表头：序号/日期/知识点(或试卷类型)/正确数量/题目总数/正确率/用时/问题/改进方法 */
 async function importStudyExcel(input){
   const file=input.files[0];
@@ -2610,7 +2613,9 @@ async function importStudyExcel(input){
   toast('正在解析Excel...');
   try{
     if(!window.XLSX){
-      await loadScript('https://cdn.bootcdn.net/ajax/libs/xlsx/0.18.5/xlsx.full.min.js');
+      // v2.2.67：改多源兜底（bootcdn/jsdelivr/unpkg 轮换），单一 CDN 失败不再导致"解析失败：undefined"
+      const ok=await loadXlsxLib();
+      if(!ok){ toast('表格解析库加载失败，请检查网络后重试'); return; }
     }
     const arrayBuffer=await file.arrayBuffer();
     const wb=XLSX.read(arrayBuffer,{type:'array'});
@@ -2713,7 +2718,8 @@ async function importStudyExcel(input){
     renderStudy();
     input.value='';
   }catch(err){
-    toast('解析失败：'+err.message);
+    // v2.2.67：loadScript 失败 reject 出来的是 Event（无 message），会显示"解析失败：undefined"——兜底成人话
+    toast('解析失败：'+(err&&err.message?err.message:'表格解析库加载失败或文件格式不支持，请检查网络后重试'));
     console.error(err);
   }
 }
@@ -2855,6 +2861,18 @@ async function loadXlsxLib(){
   }
   return !!window.XLSX;
 }
+/* v2.2.68：通用多 CDN 兜底加载任意第三方库（jszip / mammoth 等）。
+   单源 CDN 是隐性单点故障——loadScript 失败时 reject 出的是 Event（无 message），
+   靠 err.message 展示会变成"undefined"，用户完全看不懂 */
+async function loadScriptAny(urls, globalName){
+  if(globalName && window[globalName]) return true;
+  for(const u of urls){
+    try{ await loadScript(u); if(!globalName || window[globalName]) return true; }catch(e){}
+  }
+  return globalName ? !!window[globalName] : false;
+}
+const JSZIP_CDNS=['https://cdn.bootcdn.net/ajax/libs/jszip/3.10.1/jszip.min.js','https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js','https://unpkg.com/jszip@3.10.1/dist/jszip.min.js'];
+const MAMMOTH_CDNS=['https://cdn.bootcdn.net/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js','https://cdn.jsdelivr.net/npm/mammoth@1.6.0/browser/mammoth.browser.min.js','https://unpkg.com/mammoth@1.6.0/browser/mammoth.browser.min.js'];
 /* 兼容移动浏览器的下载（与下载页一致的方式） */
 function downloadBlob(filename, blob){
   try{
@@ -2915,7 +2933,8 @@ async function exportErrorExcel(){
    返回 {sheetName: [{row:行号, dataUrl}, ...]} */
 async function extractXlsxImages(arrayBuffer, sheetNames){
   if(typeof JSZip==='undefined'){
-    try{ await loadScript('https://cdn.bootcdn.net/ajax/libs/jszip/3.10.1/jszip.min.js'); }catch(e){ return {}; }
+    const ok=await loadScriptAny(JSZIP_CDNS,'JSZip'); // v2.2.68：多源兜底
+    if(!ok) return {};
   }
   try{
     const zip = await JSZip.loadAsync(arrayBuffer);
@@ -3100,7 +3119,9 @@ async function importTomatoFile(input){
       rows=buildRows(arr, findHeaderRow(arr));
     }else{
       if(!window.XLSX){
-        await loadScript('https://cdn.bootcdn.net/ajax/libs/xlsx/0.18.5/xlsx.full.min.js');
+        // v2.2.67：改多源兜底（bootcdn/jsdelivr/unpkg 轮换），单一 CDN 失败不再导致"解析失败：undefined"
+        const ok=await loadXlsxLib();
+        if(!ok){ toast('表格解析库加载失败，请检查网络后重试'); return; }
       }
       const wb=XLSX.read(await file.arrayBuffer(),{type:'array',cellDates:true});
       rows=[];
@@ -3183,7 +3204,8 @@ async function importTomatoFile(input){
         <button class="btn" style="flex:1;background:var(--accent);" onclick="doImportTomato('overwrite')">覆盖当天</button>
       </div>`);
   }catch(err){
-    toast('解析失败：'+err.message);
+    // v2.2.67：loadScript 失败 reject 出来的是 Event（无 message），会显示"解析失败：undefined"——兜底成人话
+    toast('解析失败：'+(err&&err.message?err.message:'表格解析库加载失败或文件格式不支持，请检查网络后重试'));
     console.error(err);
   }
 }
@@ -3906,7 +3928,9 @@ async function paperUploadDoc(input){
     toast('正在解析Word...');
     try{
       if(!window.mammoth){
-        await loadScript('https://cdn.bootcdn.net/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js');
+        // v2.2.68：多源兜底，失败不再误导成"请尝试.txt格式"
+        const ok=await loadScriptAny(MAMMOTH_CDNS,'mammoth');
+        if(!ok){ toast('文档解析库加载失败，请检查网络后重试'); return; }
       }
       const arrayBuffer=await file.arrayBuffer();
       const result=await window.mammoth.extractRawText({arrayBuffer});
@@ -4639,7 +4663,9 @@ async function uploadDoc(input){
     toast('正在解析Word...');
     try{
       if(!window.mammoth){
-        await loadScript('https://cdn.bootcdn.net/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js');
+        // v2.2.68：多源兜底，失败不再误导成"请尝试.txt格式"
+        const ok=await loadScriptAny(MAMMOTH_CDNS,'mammoth');
+        if(!ok){ toast('文档解析库加载失败，请检查网络后重试'); return; }
       }
       const arrayBuffer=await file.arrayBuffer();
       const result=await window.mammoth.extractRawText({arrayBuffer});
@@ -4884,13 +4910,6 @@ function renderSettings(){
       <div class="set-item" style="border-top:1px solid var(--border);padding-top:8px;">
         <div><div class="s-name">📋 查看推送历史</div><div class="s-desc">查看历次推送内容</div></div>
         <button class="btn btn-sm btn-outline" onclick="navTo('push')">查看</button>
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-title"><span class="left"><span class="emoji">📊</span>每周错题汇总</span></div>
-      <div class="set-item">
-        <div><div class="s-name">生成本周错题报告</div><div class="s-desc">提炼本周薄弱点与提升方向</div></div>
-        <button class="btn btn-sm btn-outline" onclick="generateWeeklyReport()">生成</button>
       </div>
     </div>
     <div class="card">
@@ -6127,52 +6146,6 @@ async function generateNightPush(){
   renderPush();
   toast('已生成晚间复盘提醒');
 }
-async function generateWeeklyReport(){
-  // v2.2.38：同晚间推送，生成前先拉一次云端数据
-  try{ await syncPullAndMerge(); }catch(e){ console.warn('[weekly report] pull pre err', e); }
-  const week=getRecentDates(7);
-  const weekErrors=DB.errors.filter(e=>week.includes(e.date));
-  let content='本周错题汇总报告\n'+new Date().toLocaleDateString('zh-CN')+'\n\n';
-  content+=`一、本周错题总数：${weekErrors.length}题\n\n`;
-  // 按模块统计
-  const moduleCount={};
-  weekErrors.forEach(e=>{ moduleCount[e.module]=(moduleCount[e.module]||0)+1; });
-  const sorted=Object.entries(moduleCount).sort((a,b)=>b[1]-a[1]);
-  content+='二、各板块错题分布：\n';
-  if(sorted.length){
-    sorted.forEach(([k,v])=>{
-      const mod=MODULES.find(m=>m.key===k);
-      content+=`· ${mod?mod.name:''}：${v}题\n`;
-    });
-  }else{
-    content+='本周无错题记录，棒！\n';
-  }
-  content+='\n三、薄弱点提炼：\n';
-  if(sorted.length){
-    const top=sorted.slice(0,3);
-    top.forEach(([k,v])=>{
-      const mod=MODULES.find(m=>m.key===k);
-      const modErrors=weekErrors.filter(e=>e.module===k);
-      const points=modErrors.map(e=>e.point).filter(Boolean);
-      content+=`· 【${mod?mod.name:''}】${v}题错\n`;
-      if(points.length) content+=`  知识点：${points.slice(0,3).join('；')}\n`;
-    });
-  }
-  content+='\n四、提升方向建议：\n';
-  if(sorted.length){
-    const weak=sorted[0][0];
-    const mod=MODULES.find(m=>m.key===weak);
-    content+=`1. 重点攻克【${mod?mod.name:''}】，建议本周增加该模块练习量\n`;
-    content+='2. 整理错题本，归纳同类题型解题方法\n';
-    content+='3. 结合每日考点推送，强化薄弱知识点记忆\n';
-    content+='4. 每日复盘，记录易错点避免重复犯错\n';
-  }else{
-    content+='继续保持，稳扎稳打！\n';
-  }
-  addPush('周报','📊 每周错题汇总报告',content);
-  renderPush();
-  toast('已生成本周错题报告');
-}
 
 /* ============================================================
    定时提醒检查（每次打开应用时检查）
@@ -6239,7 +6212,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.2.64';
+const APP_VERSION='v2.2.68';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
