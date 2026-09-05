@@ -3217,6 +3217,10 @@ const MODULE_KEYWORDS=[
   ['综合应用','zh'],['常识判断','cs'],['政治理论','zzll'],['判断推理','pd'],['言语理解','yy'],
   ['数量关系','sl'],['资料分析','zl'],['图形推理','pd'],['定义判断','pd'],['类比推理','pd'],['数学运算','sl'],
   ['逻辑判断','pd'],
+  // v2.2.69：一拖五=国考逻辑判断的材料型题型（一段材料拖5小题），属判断推理，不是资料分析
+  ['一拖五','pd'],
+  // v2.2.69：简称补充——综应=综合应用能力（须早于下面的「系统课」，否则「综应系统课」会误入面试）
+  ['综应','zh'],['总书记','zzll'],
   // 通用统筹（模考）
   ['模考复盘','mk'],['模考','mk'],
   // 错题复盘（跨模块）
@@ -3224,6 +3228,7 @@ const MODULE_KEYWORDS=[
   // 申论
   ['申论','sl2'],['概括题','sl2'],['综合分析题','sl2'],['对策建议题','sl2'],['应用文','sl2'],['大作文','sl2'],
   ['时评','sl2'],['十五五','sl2'],['政府工作报告','sl2'],['新闻','sl2'],['论述','sl2'],['素材','sl2'],
+  ['分论点','sl2'],
   // 面试
   ['面试','ms'],['系统课','ms'],['逐字稿','ms'],
   // 短关键词
@@ -4483,7 +4488,7 @@ async function renderAccu(){
             items=[...(hier.length?hier:dailyPick(wnArr,hashStr(xc),1)), ...dailyPick(eg, hashStr(xc), 2)];
           } else {
             items=dailyPick(xtData[xc], hashStr(xc), 3);
-          } return `<details style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--text);cursor:pointer;padding:4px 0;">${escapeHtml(xc)}</summary><div>${items.map(x=>{if(isWN && x.split('\n').length>2) return renderWanneng(x); const lines=x.split('\n');if(lines.length<=1)return`<div style="font-size:12px;color:var(--text);padding:2px 0;line-height:1.7;">${escapeHtml(x)}</div>`;return`<div style="font-size:12px;color:var(--text);padding:2px 0;line-height:1.7;">${lines.map((l,i)=>i===0?`<span style="font-weight:500;">${escapeHtml(l)}</span>`:`<div style="padding-left:1em;margin-top:1px;color:var(--text-secondary);">${escapeHtml(l)}</div>`).join('')}</div>`;}).join('')}</div></details>`;}).join('');
+          } return `<details style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--text);cursor:pointer;padding:4px 0;">${escapeHtml(xc)}</summary><div>${items.map(x=>{const _i=x.indexOf('\u0001');const sub=_i>-1?x.slice(0,_i):'';const body=_i>-1?x.slice(_i+1):x;const tag=sub?`<span style="display:inline-block;font-size:10px;line-height:1.6;color:var(--text-light);background:var(--bg-soft);border-radius:8px;padding:0 6px;margin-right:5px;">${escapeHtml(sub)}</span>`:'';if(isWN && body.split('\n').length>2) return tag+renderWanneng(body); const lines=body.split('\n');if(lines.length<=1)return`<div style="font-size:12px;color:var(--text);padding:2px 0;line-height:1.7;">${tag}${escapeHtml(body)}</div>`;return`<div style="font-size:12px;color:var(--text);padding:2px 0;line-height:1.7;">${lines.map((l,i)=>i===0?`<span style="font-weight:500;">${tag}${escapeHtml(l)}</span>`:`<div style="padding-left:1em;margin-top:1px;color:var(--text-secondary);">${escapeHtml(l)}</div>`).join('')}</div>`;}).join('')}</div></details>`;}).join('');
           cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>申论小题</span><span class="section-tag">${xtCats.length}类</span></div>${xtHtml}</div>`;
         }
       }
@@ -5681,22 +5686,30 @@ function pickSection(results, types){
 /* 专项解析"申论小题积累"文档：
    一、规范表达 / 二、对策积累（XX类话题） / 三、常用矛盾范畴 */
 function parseXiaoTi(records){
-  const result={}; // {分类: [内容]}
+  const result={}; // {分类: [内容]}，内容可能带 "\u0001子话题" 前缀（v2.2.70）
+  const SEP='\u0001'; // 子话题标签分隔符，正文里不会出现，避免与 \t 表格列混淆
   let curCat='';
   let curTopic='';
+  let curSub='';     // v2.2.70：三级子话题（（1）XX），只作标签、不进分类键
   let inSectionBlock=false; // v2.2.43：是否当前在章节标题块内（用于多层嵌套合并）
+  // v2.2.70：新条目前缀子话题标签；老文档没有（1）层级时 curSub 恒为空，行为与旧版完全一致
+  const pushItem=(arr,txt)=>{ arr.push(curSub?curSub+SEP+txt:txt); };
   records.forEach(k=>{
     const lines=(k.content||'').split(/\n+/).map(s=>s.trim().replace(/^[▼▷▶\s#*]+/,'').replace(/[*#]+$/,'')).filter(Boolean);
     for(const line of lines){
       // 一级标题：一、二、三、
       const m1=line.match(/^[一二三四五六七八九十]+、(.+)$/);
-      if(m1){ curCat=m1[1].trim(); curTopic=''; inSectionBlock=false; continue; }
-      // 二级：（一）（二）
-      const m2=line.match(/^（[一二三四五六七八九十\d]+）(.+)$/);
-      if(m2){ curTopic=m2[1].trim(); inSectionBlock=false; continue; }
-      // XX类话题 / XX话题
-      const m3=line.match(/^(.+(?:类话题|话题))$/);
-      if(m3){ curTopic=m3[1].trim(); inSectionBlock=false; continue; }
+      if(m1){ curCat=m1[1].trim(); curTopic=''; curSub=''; inSectionBlock=false; continue; }
+      // v2.2.70：三级子话题（1）（2）—— 必须早于二级判断，否则会被下面的 m2 当成话题名把大话题覆盖掉。
+      // 只记录为标签，不改变 curTopic，这样分类键仍是大话题（如"乡村振兴类话题"）。
+      const m2s=line.match(/^（\d+）(.+)$/);
+      if(m2s){ curSub=m2s[1].trim(); inSectionBlock=false; continue; }
+      // 二级：（一）（二）—— 仅中文数字（去掉了 \d，阿拉伯数字已由上面的 m2s 接管）
+      const m2=line.match(/^（[一二三四五六七八九十]+）(.+)$/);
+      if(m2){ curTopic=m2[1].trim(); curSub=''; inSectionBlock=false; continue; }
+      // XX类话题 / XX话题（v2.2.70：限长 20 字，避免"……常用于分析XX类话题"这类说明行被误判成话题标题）
+      const m3=line.length<=20?line.match(/^(.+(?:类话题|话题))$/):null;
+      if(m3){ curTopic=m3[1].trim(); curSub=''; inSectionBlock=false; continue; }
       // 内容行（v2.2.28：≥5 字，5 字的对子如"市场一政府"也要保留）
       if(line.length>=5 && !/^用途[：:]/.test(line)){
         const key=curTopic?curCat+'·'+curTopic:curCat;
@@ -5718,27 +5731,43 @@ function parseXiaoTi(records){
             if(inSectionBlock){
               result[key][result[key].length-1]+='\n'+line;
             }else if(isSectionHeader){
-              result[key].push(line);
+              pushItem(result[key], line);
               inSectionBlock=true;
             }else{
               const isPair=/^[^，。；：的而是和与对为\u2014\u2013\-]{2,20}[\u2014\u2013\-一][^，。；：的而是和与对为\u2014\u2013\-]{2,20}$/.test(line);
               if(isPair){
-                result[key].push(line);
+                pushItem(result[key], line);
               }else if(/矛盾|范畴/.test(curCat) && result[key].length){
                 result[key][result[key].length-1]+='\n'+line;
               }else{
-                result[key].push(line);
+                pushItem(result[key], line);
               }
             }
           }else{
-            // 非万能思维体系分类：保持原有独立条目逻辑
+            // v2.2.71：块合并扩展到全分类 —— "深化多业态融合发展方面："这类以冒号结尾的分组小标题，
+            // 与它后面的内容被按行切分拆散，随机抽卡时可能只抽到光杆标题（该名额作废）。
+            // 此处让这类标题行开启一个块，后续行追加到块末尾，直到遇到下一个 一级/二级/三级/话题 标题
+            // （m1/m2s/m2/m3 各分支已置 inSectionBlock=false）才退出。
+            // 判据收紧：以冒号结尾 + ≤45字 + 不含句读标点 + 非 eg./非编号开头，避免误合并正常内容行
+            // （正常内容行以句号结尾或冒号在句中，均不命中）。
+            // 矛盾范畴有自己的对子合并逻辑，跳过以免互相干扰。
             const isPair=/^[^，。；：的而是和与对为\u2014\u2013\-]{2,20}[\u2014\u2013\-一][^，。；：的而是和与对为\u2014\u2013\-]{2,20}$/.test(line);
-            if(isPair){
-              result[key].push(line);
+            const isColonHeader=!/矛盾|范畴/.test(curCat)
+              && /[：:]\s*$/.test(line) && line.length<=45
+              && !/[，。；,.;？?！!]/.test(line)
+              && !/^eg[.\s：:]/.test(line) && !/^\d+[\.\s]/.test(line);
+            if(isColonHeader){
+              // 冒号标题行一律开启新块（含"块内又遇到下一个标题"的情况），否则后续标题会被吞进上一个块
+              pushItem(result[key], line);
+              inSectionBlock=true;
+            }else if(inSectionBlock){
+              result[key][result[key].length-1]+='\n'+line;
+            }else if(isPair){
+              pushItem(result[key], line);
             }else if(/矛盾|范畴/.test(curCat) && result[key].length){
               result[key][result[key].length-1]+='\n'+line;
             }else{
-              result[key].push(line);
+              pushItem(result[key], line);
             }
           }
         }
@@ -6212,7 +6241,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.2.68';
+const APP_VERSION='v2.2.71';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
