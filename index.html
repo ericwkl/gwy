@@ -971,10 +971,14 @@ function renderMkSubGrouped(items){
   });
   return subKeys.map(s=>{
     const sItems=bySub[s];
+    // v2.2.73：无子模块（sub 为空）的考点组显示"未分类"组标题，不再与上方子模块组粘连造成"被归错类"的观感
     const header=s?`<div style="display:flex;align-items:center;gap:6px;margin:8px 0 4px 4px;">
       <span style="font-size:12px;font-weight:600;color:var(--accent);">▸ ${s}</span>
       <span style="font-size:10px;background:var(--accent-soft);color:var(--accent);border-radius:8px;padding:0 6px;">${sItems.length}条</span>
-    </div>`:'';
+    </div>`:`<div style="display:flex;align-items:center;gap:6px;margin:8px 0 4px 4px;">
+      <span style="font-size:12px;font-weight:600;color:var(--text-light);">▸ 未分类</span>
+      <span style="font-size:10px;background:var(--primary-soft);color:var(--text-light);border-radius:8px;padding:0 6px;">${sItems.length}条</span>
+    </div>`;
     return header+sItems.map(m=>mkItemHtml(m)).join('');
   }).join('');
 }
@@ -4316,7 +4320,7 @@ async function renderAccu(){
   const seed=getAccuSeed();
   // v2.2.57：缓存带版本号——解析/渲染逻辑升级时手动+1，强制旧版本渲染的缓存 HTML 失效，
   // 防止跨版本复用旧缓存（如 v2.2.55 渲染的【莫此】拆词 HTML 在 v2.2.56 下继续命中）
-  const ACCU_CACHE_VER=6;
+  const ACCU_CACHE_VER=7;
   // 知识库签名：条数+最新更新时间，知识库变化时缓存自动失效
   const kbItems=DB.knowledge||[];
   const kbSig=kbItems.length+'_'+(kbItems.length?Math.max(...kbItems.map(k=>k.updatedAt||0)):0);
@@ -4337,8 +4341,18 @@ async function renderAccu(){
       const hasLive=liveNews.gov.length||liveNews.gd.length;
       let newsSections='';
         if(hasLive){
-        // v2.2.35：广东要闻只保留广东本地新闻，过滤掉广东省政府网转载的全国/中央时政
-        const isGuangdongNews=t=>!/国务院全体会议|国务院常务会议|国务院.*会议|国务院总理|国务院新闻|中共中央政治局|中央财经委员会|全国人大常委会|全国政协|中央书记处|中央军委/.test(t)||/广东|粤|大湾区|省委|省政府|黄坤明|孟凡利|广州|深圳|珠海|佛山|东莞|汕头|韶关|湛江|惠州|潮州|汕头/.test(t);
+        // v2.2.73：广东要闻过滤改两层判断（此前为关键词黑名单，会漏掉"张国清出席…开幕式并致辞"这类
+        // 不带会议字样、只是碰巧转载在 gd.gov.cn 上的全国/国际新闻）：
+        // ① 广东信号命中即保留（不看场合）——省/大湾区/珠三角/省内 21 地市/省委省政府/在粤领导；
+        //    2026 为 APEC 中国年、第三十三次领导人非正式会议 11 月在深圳举行（用户确认），
+        //    APEC/亚太经合组织相关新闻同样按"身边大事"保留。
+        // ② 其余标题带全国/中央场合词的判为转载的全国新闻，过滤：中央机构、非 APEC 国际组织、
+        //    全国性会议，以及中央领导人姓名兜底（"习近平同X通话"这类纯姓名标题无机构词也能拦住）。
+        //    姓名只在没有任何广东信号时才生效，本地新闻（白名单优先）永不受影响。
+        const isGuangdongNews=t=>{
+          if(/广东|粤|大湾区|粤港澳|珠三角|省委|省政府|省政协|省人大|黄坤明|孟凡利|广州|深圳|珠海|汕头|佛山|韶关|湛江|肇庆|江门|茂名|惠州|梅州|汕尾|河源|阳江|清远|东莞|中山|潮州|揭阳|云浮|APEC|亚太经合组织/.test(t)) return true;
+          return !/国务院|中共中央|中央政治局|中央财经|中央书记处|中央军委|全国人大|全国政协|中组部|外交部|发改委|商务部|工信部|教育部|科技部|农业农村部|市场监管总局|二十国集团|G20|联合国|金砖|上合组织|世贸组织|东盟|中央经济工作会议|农村工作会议|中央金融工作会议|全国两会|人民代表大会|习近平|李强|赵乐际|王沪宁|蔡奇|丁薛祥|李希|张国清|刘国中|何立峰|谌贻琴|王小洪|吴政隆|王毅|韩正/.test(t);
+        };
         let gdList=liveNews.gd.filter(n=>isGuangdongNews(n.title)).slice(0,3);
         if(!gdList.length){
           const gdPool=SZ_HOT_POOL.filter(h=>h.isGD);
@@ -4350,9 +4364,9 @@ async function renderAccu(){
         const govList=liveNews.gov.filter(n=>!liveNews.gd.some(g=>g.title===n.title)).slice(0,6);
         if(govList.length){
           newsSections+=`<details open style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--primary);cursor:pointer;padding:4px 0;">时政热点</summary><div>${govList.map(n=>{
+            // v2.2.73：去掉抓取摘要尾巴（外部摘要常为截断残句，如"规模以上工业中小企业研发费用内部支出年均增长"），只保留标题+链接
             let line='· '+(n.date?'['+n.date.slice(5)+'] ':'')+n.title;
             if(n.url) line+='\n  '+n.url;
-            if(n.digest) line+='\n  '+n.digest;
             return `<div style="padding:3px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);white-space:pre-wrap;word-break:break-all;">${linkify(line)}</div>`;
           }).join('')}</div></details>`;
         }
@@ -4421,8 +4435,21 @@ async function renderAccu(){
     if(!items.length) continue;
     if(cat.display==='言语素材'){
       const words=extractYyWords(items);
-      // v2.2.49：pickFresh 近7天已展示去重（双保险：对比组去重+7天内不重样）
-      const picked=pickFresh(words,20260820,12,'accuYySeen');
+      // v2.2.73：当天批次持久化——首次抽好后写入 DB.yyPickCache，当天内（含知识库更新触发缓存
+      // 失效重渲染）直接复用已抽好的一批；次日（日期变）或点"换一批"（accuSeedCount+1）才基于
+      // 最新词库重抽。修复用户反馈"每次更新知识库后言语积累整批变掉"。
+      // 抽取本身仍为确定性算法（同词库同日期跨设备结果一致），yyPickCache 仅防止词库集合变化扰动当天批次。
+      const yyKey=todayStr()+'@'+(DB.accuSeedCount||0);
+      let picked=(DB.yyPickCache&&DB.yyPickCache.key===yyKey)?(DB.yyPickCache.list||[]):null;
+      if(picked){
+        picked=picked.filter(w=>words.indexOf(w)>=0); // 词条当天被删则剔除，避免展示已删内容
+        if(!picked.length) picked=null;               // 批次为空则回退重抽
+      }
+      if(!picked){
+        picked=pickFresh(words,20260820,12,'accuYySeen');
+        DB.yyPickCache={key:yyKey,list:picked};
+        saveDB();
+      }
       if(picked.length){
         cards+=`<div class="card">
           <div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span class="section-tag">${words.length}条</span></div>
@@ -6252,7 +6279,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.2.72';
+const APP_VERSION='v2.2.73';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
@@ -6618,6 +6645,7 @@ async function slimForSync(){
   const clone = JSON.parse(JSON.stringify(DB));
   delete clone.accuHtmlCache;
   delete clone.accuYySeen;                    // 近7天已展示去重记录是本地用的，不传上云端
+  delete clone.yyPickCache;                   // v2.2.73：言语素材当天已抽批次，本地缓存不上云（同词库同日期另一设备自行确定性重抽，结果一致）
   delete clone._uploadedMap;                 // 去重账本是本地用的，不传上云端
   if(!DB._uploadedMap) DB._uploadedMap = {};
   const tasks = [];
