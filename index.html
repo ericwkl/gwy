@@ -642,21 +642,29 @@ function renderHome(){
    未点「已掌握」（或点「待复习」）则明天继续显示，
    完成全部 5 轮复习后彻底记住，不再出现在待复习
    ============================================================ */
-const EBB_DAYS=[0,1,2,4,7,15]; // 标准艾宾浩斯间隔：录入当天=第1轮；完成第N轮后隔 EBB_DAYS[N] 天（1/2/4/7/15），共5轮复习后彻底记住（stage 0→5）
+const EBB_DAYS=[0,1,2,4,7,15]; // 索引 N = 第 N 轮复习距上一轮的天数（1/2/4/7/15）
+// v2.2.72：轮次 = 复习次数。录入当天是"初次学习"，不进待复习列表、不占一次点击；
+// 第1轮复习直接排在录入日 +EBB_DAYS[1]（1 天）后，走完 5 轮（stage 5）彻底记住。
+// 修复前：显示用 stage+1 把录入当天当第1轮，且完成阈值写死 >=5 —— 两者叠加导致
+// 界面"第5轮"其实只是第4次复习，一完成就 done，15 天那次从未排上（实际只走 1/2/4/7 四次）。
+function ebbRoundText(st){ return '第'+((st.stage||0)+1)+'轮'; } // stage 0..4 → 第1..5轮
 function ebbNextDate(base, stage){ // （未使用）旧绝对排期算法，间隔统一改由"完成日+EBB_DAYS[stage]"计算
   const d=new Date(base+'T00:00:00');
   d.setDate(d.getDate() + (EBB_DAYS[stage]-1));
   return localDateStr(d);
 }
 function ebbInit(base){
-  // 录入日 = 第1天：当天即可复习（base=today → next=today 立即显示；过去录入 → 已过期显示）
-  return {stage:0, base, next:base, done:false};
+  // v2.2.72：录入当天不再进入待复习列表（用户原话"不会"当天再过一遍），
+  // 第1轮复习直接排到录入日 +EBB_DAYS[1]（1 天）后；录入当天不占一次点击，stage 就等于复习次数。
+  const d=new Date(base+'T00:00:00'); d.setDate(d.getDate()+EBB_DAYS[1]);
+  return {stage:0, base, next:localDateStr(d), done:false};
 }
-/* 兼容旧数据：stage0 且今天新增但 next 被设为明天（旧版bug）→ 修正为今天可复习；
-   用户主动点过「待复习」的状态（pending=true）不做修正 */
+/* 兼容旧数据：v2.2.72 之前录入当天就要复习一条（next=base），存量 stage=0 且 next<=base 的
+   统一改排 base+1 天，与新录入保持一致；用户主动点过「待复习」的（pending=true）不动 */
 function ebbFixOld(st){
-  if(st && st.stage===0 && !st.done && !st.pending && st.base===todayStr() && st.next>todayStr()){
-    st.next=todayStr();
+  if(st && st.stage===0 && !st.done && !st.pending && st.base && st.next && st.next<=st.base){
+    const d=new Date(st.base+'T00:00:00'); d.setDate(d.getDate()+EBB_DAYS[1]);
+    st.next=localDateStr(d);
   }
   return st;
 }
@@ -679,10 +687,10 @@ function renderTodayErrorEbb(){
     const st=getErrorEbb(e);
     const mod=MODULES.find(m=>m.key===e.module);
     const badge=mod?mod.name+(e.sub?'·'+e.sub:''):'未分类';
-    const round=st.stage+1;
+    const round=ebbRoundText(st); // v2.2.72：轮次=复习次数，录入当天（stage 0）显示「初次录入」
     return `<div style="display:flex;align-items:center;gap:6px;padding:8px 0;border-bottom:1px solid var(--border);">
       <span style="flex-shrink:0;font-size:10px;padding:1px 6px;border-radius:6px;background:var(--primary-soft);color:var(--primary);white-space:nowrap;">${badge}</span>
-      <span style="flex-shrink:0;font-size:10px;color:var(--accent);background:var(--accent-soft);padding:0 6px;border-radius:6px;">第${round}轮</span>
+      <span style="flex-shrink:0;font-size:10px;color:var(--accent);background:var(--accent-soft);padding:0 6px;border-radius:6px;">${round}</span>
       <span style="flex:1;min-width:0;font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;" onclick="viewErrorDetail('${e.id}')">${escapeHtml(e.desc||'无题目')}</span>
       <button class="btn btn-sm" style="padding:2px 8px;font-size:11px;background:var(--primary);color:#fff;flex-shrink:0;" onclick="ebbErrorAction('${e.id}','master')">已掌握</button>
       <button class="btn btn-sm btn-outline" style="padding:2px 8px;font-size:11px;flex-shrink:0;" onclick="ebbErrorAction('${e.id}','again')">待复习</button>
@@ -697,10 +705,10 @@ function renderTodayMistakeEbb(){
   return mkts.slice(0,5).map(m=>{
     const st=getMistakeEbb(m);
     const mod=MODULES.find(x=>x.key===m.module)||MODULES.find(x=>x.name===m.module);
-    const round=st.stage+1;
+    const round=ebbRoundText(st); // v2.2.72：同上
     return `<div style="display:flex;align-items:center;gap:6px;padding:8px 0;border-bottom:1px solid var(--border);">
       <span style="flex-shrink:0;font-size:10px;padding:1px 6px;border-radius:6px;background:var(--warning-soft);color:var(--warning);white-space:nowrap;">${mod?mod.name:'未分类'}${m.sub?'·'+m.sub:''}</span>
-      <span style="flex-shrink:0;font-size:10px;color:var(--accent);background:var(--accent-soft);padding:0 6px;border-radius:6px;">第${round}轮</span>
+      <span style="flex-shrink:0;font-size:10px;color:var(--accent);background:var(--accent-soft);padding:0 6px;border-radius:6px;">${round}</span>
       <span style="flex:1;min-width:0;font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;" onclick="viewMistakeDetail('${m.id}')">${escapeHtml(m.point||'')}</span>
       <button class="btn btn-sm" style="padding:2px 8px;font-size:11px;background:var(--primary);color:#fff;flex-shrink:0;" onclick="ebbMistakeAction('${m.id}','master')">已掌握</button>
       <button class="btn btn-sm btn-outline" style="padding:2px 8px;font-size:11px;flex-shrink:0;" onclick="ebbMistakeAction('${m.id}','again')">待复习</button>
@@ -713,11 +721,13 @@ function ebbErrorAction(id, action){
   if(action==='master'){
     delete st.pending;
     st.stage++;
+    // v2.2.72：stage = 已完成复习次数，走完 5 轮即彻底记住
     if(st.stage>=5){ st.done=true; st.next=''; toast('🎉 5轮复习完成，彻底记住！'); }
     else{
       // v2.2.28：完成第N轮后隔 EBB_DAYS[N] 天（2/4/7/15）。原错位用 EBB_DAYS[N-1]（1/2/4/7），
       // 导致 15号完成第二轮 → 17号（隔2天）；正确应为 19号（隔4天）
-      const d=new Date(); d.setDate(d.getDate()+EBB_DAYS[st.stage]);
+      // v2.2.72：完成第 stage 轮后，下一轮是第 stage+1 轮，间隔取 EBB_DAYS[stage+1]
+      const d=new Date(); d.setDate(d.getDate()+EBB_DAYS[st.stage+1]);
       st.next=localDateStr(d);
       toast('已掌握！第'+(st.stage+1)+'轮在 '+st.next.slice(5)+' 复习');
     }
@@ -738,7 +748,8 @@ function ebbMistakeAction(id, action){
     if(st.stage>=5){ st.done=true; st.next=''; toast('🎉 5轮复习完成，彻底记住！'); }
     else{
       // v2.2.28：同错题，完成第N轮后隔 EBB_DAYS[N] 天（2/4/7/15）
-      const d=new Date(); d.setDate(d.getDate()+EBB_DAYS[st.stage]);
+      // v2.2.72：同错题，间隔取 EBB_DAYS[stage+1]
+      const d=new Date(); d.setDate(d.getDate()+EBB_DAYS[st.stage+1]);
       st.next=localDateStr(d);
       toast('已掌握！第'+(st.stage+1)+'轮在 '+st.next.slice(5)+' 复习');
     }
@@ -783,7 +794,7 @@ function showAllErrorEbb(){
     const badge=mod?mod.name+(e.sub?'·'+e.sub:''):'未分类';
     return `<div style="display:flex;align-items:center;gap:6px;padding:8px 0;border-bottom:1px solid var(--border);">
       <span style="flex-shrink:0;font-size:10px;padding:1px 6px;border-radius:6px;background:var(--primary-soft);color:var(--primary);white-space:nowrap;">${badge}</span>
-      <span style="flex-shrink:0;font-size:10px;color:var(--accent);background:var(--accent-soft);padding:0 6px;border-radius:6px;">第${st.stage+1}轮</span>
+      <span style="flex-shrink:0;font-size:10px;color:var(--accent);background:var(--accent-soft);padding:0 6px;border-radius:6px;">${ebbRoundText(st)}</span>
       <span style="flex:1;min-width:0;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;" onclick="viewErrorDetail('${e.id}')">${escapeHtml(e.desc||'无题目')}</span>
       <button class="btn btn-sm" style="padding:2px 8px;font-size:11px;background:var(--primary);color:#fff;flex-shrink:0;" onclick="ebbErrorAction('${e.id}','master')">已掌握</button>
       <button class="btn btn-sm btn-outline" style="padding:2px 8px;font-size:11px;flex-shrink:0;" onclick="ebbErrorAction('${e.id}','again')">待复习</button>
@@ -836,7 +847,7 @@ function showAllMistakeEbb(){
     const st=getMistakeEbb(m); const mod=MODULES.find(x=>x.key===m.module);
     return `<div style="display:flex;align-items:center;gap:6px;padding:8px 0;border-bottom:1px solid var(--border);">
       <span style="flex-shrink:0;font-size:10px;padding:1px 6px;border-radius:6px;background:var(--warning-soft);color:var(--warning);white-space:nowrap;">${mod?mod.name:'未分类'}${m.sub?'·'+m.sub:''}</span>
-      <span style="flex-shrink:0;font-size:10px;color:var(--accent);background:var(--accent-soft);padding:0 6px;border-radius:6px;">第${st.stage+1}轮</span>
+      <span style="flex-shrink:0;font-size:10px;color:var(--accent);background:var(--accent-soft);padding:0 6px;border-radius:6px;">${ebbRoundText(st)}</span>
       <span style="flex:1;min-width:0;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;" onclick="viewMistakeDetail('${m.id}')">${escapeHtml(m.point||'')}</span>
       <button class="btn btn-sm" style="padding:2px 8px;font-size:11px;background:var(--primary);color:#fff;flex-shrink:0;" onclick="ebbMistakeAction('${m.id}','master')">已掌握</button>
       <button class="btn btn-sm btn-outline" style="padding:2px 8px;font-size:11px;flex-shrink:0;" onclick="ebbMistakeAction('${m.id}','again')">待复习</button>
@@ -971,7 +982,7 @@ function renderMkSubGrouped(items){
 function mkItemHtml(m){
   const mod=MODULES.find(x=>x.key===m.module)||MODULES.find(x=>x.name===m.module);
   const st=getMistakeEbb(m);
-  const round=st.done?'✅':'第'+(st.stage+1)+'轮';
+  const round=st.done?'✅':ebbRoundText(st);
   const badge=mod?mod.icon+' '+mod.name+(m.sub?'·'+m.sub:''):'未分类';
   const firstLine=(m.point||'').split('\n')[0].trim();
   return `<div class="error-item" style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:9px 10px;" onclick="viewMistakeDetail('${m.id}')">
@@ -995,7 +1006,7 @@ function viewMistakeDetail(id){
   openModal(`<div class="modal-head"><h3>考点详情</h3><button class="modal-close" onclick="backFromMistakeDetail()">✕</button></div>
     <div style="font-size:11px;color:var(--text-light);margin-bottom:10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
       <span style="padding:2px 8px;border-radius:10px;background:var(--warning-soft);color:var(--warning);">${mod?mod.name:'未分类'}${m.sub?' · '+m.sub:''}</span>
-      <span style="padding:2px 8px;border-radius:10px;background:var(--accent-soft);color:var(--accent);">第${st.stage+1}轮/5</span>
+      <span style="padding:2px 8px;border-radius:10px;background:var(--accent-soft);color:var(--accent);">${st.done?'✅ 5轮已完成':ebbRoundText(st)+'/5'}</span>
       ${m.date?`<span>${m.date}</span>`:''}
       ${st.done?`<span style="color:var(--primary);">✅ 已彻底掌握</span>`:''}
     </div>
@@ -1447,7 +1458,7 @@ function errorItemHtml(e, tagPrefix){
   const mod=MODULES.find(m=>m.key===e.module);
   const badge=mod?mod.icon+' '+mod.name+(e.sub?'·'+e.sub:''):'未分类';
   const st=getErrorEbb(e);
-  const round=st.done?'✅ 已掌握':'第'+(st.stage+1)+'轮';
+  const round=st.done?'✅ 已掌握':ebbRoundText(st);
   return `<div class="error-item" style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:9px 10px;" onclick="viewErrorDetail('${e.id}')">
     <span class="r-tag" style="flex-shrink:0;margin:0;font-size:10px;white-space:nowrap;">${badge}</span>
     <span style="flex-shrink:0;font-size:10px;color:var(--accent);background:var(--accent-soft);padding:0 6px;border-radius:6px;white-space:nowrap;">${round}</span>
@@ -6241,7 +6252,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.2.71';
+const APP_VERSION='v2.2.72';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
@@ -6290,8 +6301,28 @@ function init(){
     DB._ebbIntervalV3=true;
     saveDB();
   }
-  // v2.2.37：把"5轮已满但未标已掌握"的历史数据补齐（幂等，每台设备各自修本地，不依赖标记避免同步传播 race）。
+  // v2.2.72 一次性迁移：stage 语义变了——旧 stage = 点击次数（含录入当天那一次），新 stage = 复习次数（不含）。
+  //   旧 stage=N 的 next 本就是"完成日 +EBB_DAYS[N]"，新语义 stage=N-1 的下一轮也是 +EBB_DAYS[(N-1)+1]=+EBB_DAYS[N]，
+  //   日期天然吻合，所以只需 stage-1、next 原样保留。done 的跳过（已彻底掌握，不复活）。
+  //   幂等靠**条目级**标记 st._v72：每条目只迁一次，随数据走，避免多设备各迁一次导致重复减。
+  {
+    let _ebbShiftChanged=false;
+    const shiftStage=(ebb)=>{
+      if(!ebb) return;
+      Object.values(ebb).forEach(st=>{
+        if(!st||st._v72) return;
+        if(!st.done && (st.stage||0)>0){ st.stage=(st.stage||0)-1; _ebbShiftChanged=true; }
+        st._v72=1;
+      });
+    };
+    shiftStage(DB.errorEbb); shiftStage(DB.mistakeEbb);
+    if(_ebbShiftChanged) saveDB();
+  }
+  // v2.2.37：把"轮次已满但未标已掌握"的历史数据补齐（幂等，每台设备各自修本地，不依赖标记避免同步传播 race）。
   // v2.2.34 之前完成阈值为>=6，第5轮完成后不会置 done，存量条目需补标已掌握
+  // v2.2.72：阈值随新语义回到 >=5（stage = 已完成复习次数）。已被本段补标 done 的存量条目不会复活
+  //   （开头 st.done 直接 return）——它们停在第4次复习，且 next 当年已被清空、无从反推 15 天后日期，
+  //   只能维持既定事实不回补；新录入的按 5 轮走完。
   {
     let _ebbDone5Changed=false;
     const fixDone5=(ebb)=>{
