@@ -618,7 +618,7 @@ function renderHome(){
         <button class="btn btn-sm btn-ghost" onclick="mistakeListModal()">考点本</button>
         <button class="btn btn-sm btn-outline" onclick="mistakeModal()">+ 考点</button>
       </div></div>
-    <div style="font-size:11px;color:var(--text-light);margin:-4px 0 4px;">艾宾浩斯 · 录入当天=第1轮，之后第 2/4/7/15 天各复习一次（共5轮），点「已掌握」进入下一轮</div>
+    <div style="font-size:11px;color:var(--text-light);margin:-4px 0 4px;">艾宾浩斯 · 录入当天=第1轮，之后第 2/4/7/15 天各复习一次（共5轮）；逾期未做则从补做当天顺延</div>
     ${renderTodayMistakeEbb()}
   </div>`;
 
@@ -629,7 +629,7 @@ function renderHome(){
         <button class="btn btn-sm btn-ghost" onclick="errorListModal()">错题本</button>
         <button class="btn btn-sm btn-outline" onclick="errorModal()">+ 错题</button>
       </div></div>
-    <div style="font-size:11px;color:var(--text-light);margin:-4px 0 4px;">艾宾浩斯 · 录入当天=第1轮，之后第 2/4/7/15 天各复习一次（共5轮），点「已掌握」进入下一轮</div>
+    <div style="font-size:11px;color:var(--text-light);margin:-4px 0 4px;">艾宾浩斯 · 录入当天=第1轮，之后第 2/4/7/15 天各复习一次（共5轮）；逾期未做则从补做当天顺延</div>
     ${renderTodayErrorEbb()}
   </div>`;
 
@@ -638,44 +638,57 @@ function renderHome(){
 
 /* ============================================================
    艾宾浩斯记忆复习：错题 + 易错考点
-   规律：录入后第 1 / 2 / 4 / 7 / 15 天各复习一次，
+   规律：录入当天 = 第 1 天 = 第 1 轮（当天进待复习列表），
+   之后复习间隔按轮次差分：第1轮后隔1天、第2轮后隔2天、
+   第3轮后隔3天、第4轮后隔8天（对准时的人正好落在
+   录入后第 1/2/4/7/15 天），共 5 轮。
    未点「已掌握」（或点「待复习」）则明天继续显示，
    完成全部 5 轮复习后彻底记住，不再出现在待复习
    ============================================================ */
 const EBB_DAYS=[0,1,2,4,7,15]; // 仅供历史一次性迁移代码引用，勿用于新排期逻辑
-// v2.2.74：艾宾浩斯 = 录入日起的绝对复习日表，共 5 轮。
-//   录入当天 = 第 1 天 = 第 1 轮（当天即出现在待复习列表，点一次"已掌握"）。
-//   复习日依次落在录入后第 1/2/4/7/15 天，即距录入 0/1/3/6/14 天。
-//   stage = 已完成轮数；完成第 stage 轮后，下一轮复习日 = 录入日 + EBB_ABS[stage]。
-//   走完 5 轮（stage 5）彻底记住。第 4 轮(+6天) → 第 5 轮(+14天) 相隔 8 天，
-//   符合 15-7=8 的艾宾浩斯差分，不是每轮都重加 1/2/4/7/15（旧 v2.2.72 错在按完成日累加）。
-const EBB_ABS=[0,1,3,6,14]; // 索引 stage(已完成轮数) → 下一轮复习日距录入天数
+// v2.2.74：艾宾浩斯 = 差分顺延模型，共 5 轮。
+//   录入当天 = 第 1 轮（next=base，当天出现在待复习列表）。
+//   stage = 已完成轮数。点「已掌握」完成第 N 轮后，下一轮复习日 =
+//   今天(实际完成日) + 间隔[N]，其中间隔[1..4] = EBB_ABS 相邻差分 [1,2,3,8]。
+//   准点复习时日期恰好落在录入后第 1/2/4/7/15 天（第4轮+6天→第5轮+14天隔8天，
+//   即 15-7=8）；逾期则从补做当天顺延，不会一天连做多轮、不追平历史欠轮。
+//   （v2.2.74 初版曾按"录入日绝对表"锚定，用户确认改逾期顺延。）
+const EBB_ABS=[0,1,3,6,14]; // 绝对复习日距录入天数的"概念基准"，仅用于推导轮间差分
+function ebbGapAfter(completed){ // 完成第 completed 轮后，距下一轮的间隔天数（差分）
+  if(completed<1) return 0;
+  return (EBB_ABS[completed]||0) - EBB_ABS[completed-1];
+}
 function ebbRoundText(st){ return '第'+((st.stage||0)+1)+'轮'; } // stage 0..4 → 第1..5轮
 function ebbNextDate(base, stage){ // （未使用）旧绝对排期算法，仅存档
   const d=new Date(base+'T00:00:00');
   d.setDate(d.getDate() + (EBB_DAYS[stage]-1));
   return localDateStr(d);
 }
-function ebbAbsDate(base, completed){ // 已完成 completed 轮后，下一轮复习日 = base + EBB_ABS[completed]
+function ebbAbsDate(base, completed){ // （未使用）旧绝对排期辅助，仅存档
   const d=new Date(base+'T00:00:00');
   d.setDate(d.getDate() + (EBB_ABS[completed]||0));
   return localDateStr(d);
 }
-function ebbNextSafe(base, completed){ // 绝对复习日；若已过期（录入后拖了很久才补）则不早于今天，可当日补上欠的轮次
+function ebbNextSafe(base, completed){ // （未使用）旧绝对排期辅助，仅存档
   const abs=ebbAbsDate(base, completed);
   return abs>todayStr() ? abs : todayStr();
+}
+function ebbNextFromToday(completed){ // 差分顺延：完成第 completed 轮后，下一轮 = 今天 + 差分
+  const d=new Date();
+  d.setDate(d.getDate() + ebbGapAfter(completed));
+  return localDateStr(d);
 }
 function ebbInit(base){
   // v2.2.74：录入当天=第1轮，当天就进入待复习列表（next=base），点完进入下一轮。
   return {stage:0, base, next:base, done:false};
 }
-/* 兼容旧数据：v2.2.74 起排期 = 录入日 + 绝对复习日表(EBB_ABS)。
-   渲染时对所有未完成、非推迟条目按新表对齐 next（不早于今天，逾期即今日待复习），
-   顺带纠正旧版本"完成日+EBB_DAYS"错排的存量日期（如 9/6+15=9/21 → 9/14）。
-   录入当天=第1轮 → stage0 next=base；已完成 stage 轮 → next=max(base+EBB_ABS[stage], 今天)。 */
+/* 存量数据不做迁移：旧排期 next 仍是"未来某个复习日"，日期本身有效，直接沿用即可；
+   逾期条目本来就该今天补做，补做后自然切换为顺延模型。此处 ebbFixOld 仅做轻量兜底：
+   不覆盖正常 next（避免破坏顺延结果），只纠正明显异常的脏数据。 */
 function ebbFixOld(st){
-  if(st && !st.done && !st.pending && st.base){
-    st.next=ebbNextSafe(st.base, st.stage||0);
+  if(st && !st.done && !st.pending && st.base && st.next){
+    if(st.next<st.base){ st.next=st.base; }              // 排期早于录入日：异常，回退到录入日
+    else if((st.stage||0)>=5){ st.done=true; st.next=''; } // 轮数已满未标完成：补标（幂等兜底）
   }
   return st;
 }
@@ -735,10 +748,10 @@ function ebbErrorAction(id, action){
     // v2.2.74：走完 5 轮（第1轮录入当天 + 第2/3/4/5轮在录入后第2/4/7/15天）彻底记住
     if(st.stage>=5){ st.done=true; st.next=''; toast('🎉 5轮复习完成，彻底记住！'); }
     else{
-      // v2.2.74：下一轮复习日 = 录入日 + EBB_ABS[已完成轮数]（绝对复习日表，不是完成日累加）。
-      // 例：录入 8/31，第4轮(录入+6天=9/6)点完后 → 第5轮=录入+14天=9/14，隔 8 天。
-      // 用户拍板："录入当天就是第 1 天/第 1 轮"，复习日落在录入后第 1/2/4/7/15 天。
-      st.next=ebbNextSafe(st.base||e.date||todayStr(), st.stage);
+      // v2.2.74：差分顺延模型。完成第 N 轮后，下一轮 = 今天 + 间隔[N]，间隔表 = EBB_ABS 相邻差分 [1,2,3,8]。
+      // 准点做：录入当天第1轮 → +1天第2轮 → +2天第3轮 → +3天第4轮 → +8天第5轮，恰好落在录入后第 1/2/4/7/15 天。
+      // 逾期做：从补做当天起顺延，不会同一天连补多轮（用户拍板"逾期后顺延"）。
+      st.next=ebbNextFromToday(st.stage);
       toast('已掌握！第'+(st.stage+1)+'轮在 '+st.next.slice(5)+' 复习');
     }
   }else{
@@ -757,8 +770,8 @@ function ebbMistakeAction(id, action){
     st.stage++;
     if(st.stage>=5){ st.done=true; st.next=''; toast('🎉 5轮复习完成，彻底记住！'); }
     else{
-      // v2.2.74：同错题，下一轮复习日 = 录入日 + EBB_ABS[已完成轮数]（绝对复习日表）
-      st.next=ebbNextSafe(st.base||m.date||todayStr(), st.stage);
+      // v2.2.74：同错题，差分顺延——完成第 N 轮后下一轮 = 今天 + 间隔[N]（间隔 1/2/3/8）
+      st.next=ebbNextFromToday(st.stage);
       toast('已掌握！第'+(st.stage+1)+'轮在 '+st.next.slice(5)+' 复习');
     }
   }else{
