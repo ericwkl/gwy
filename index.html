@@ -419,7 +419,18 @@ function loadDB(){
 function saveDB(){
   // 记录最后修改时间（云端同步冲突时按时间比较，最新者胜）
   try{ if(DB && DB.settings){ DB.settings.lastModified = Date.now(); } }catch(e){}
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(DB));
+  try{
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(DB));
+  }catch(e1){
+    // v2.2.76 配额自愈：写满时先清「恢复功能的历史回退副本」(…_cur，可牺牲：恢复时的数据云端也有)再重试一次。
+    // 注意不动「同步前快照」（无 _cur 后缀那份）——那是恢复功能的回退源，用户拍板保留。
+    try{
+      Object.keys(localStorage)
+        .filter(k=>k.indexOf('gk_workbench_v1_local_backup_')===0 && k.slice(-4)==='_cur')
+        .forEach(k=>{ try{ localStorage.removeItem(k); }catch(e){} });
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(DB));
+    }catch(e2){ throw e2; } // 仍失败：抛给调用方（saveKB 等有捕获的会给用户明确提示）
+  }
   // 自动同步开启时，数据改动后防抖推送到云端
   if(!_syncPushing) scheduleSyncPush();
 }
@@ -4875,23 +4886,30 @@ async function importFeishuToSettings(){
     </div>`);
 }
 function saveKB(id){
-  const cat=document.getElementById('kb_cat').value;
-  const title=document.getElementById('kb_title').value.trim();
-  const content=document.getElementById('kb_content').value.trim();
-  if(!title||!content){toast('请填写完整');return;}
-  const feishuUrl=document.getElementById('kb_feishu_url')?.value.trim()||'';
-  const source=feishuUrl?'飞书导入':'手动输入';
-  if(id){
-    const k=DB.knowledge.find(x=>x.id===id);
-    Object.assign(k,{cat,title,content,source,updatedAt:Date.now()});
-    if(feishuUrl) k.feishuUrl=feishuUrl;
-  }else{
-    DB.knowledge.push({id:uid(),cat,title,content,date:todayStr(),source,feishuUrl:feishuUrl||undefined,updatedAt:Date.now()});
+  // v2.2.76：包 try/catch——之前 saveDB 写 localStorage 失败（如配额满）会静默中断，
+  // 表现为"点保存没反应"（不关弹窗、无提示）。现在失败给明确原因。
+  try{
+    const cat=document.getElementById('kb_cat').value;
+    const title=document.getElementById('kb_title').value.trim();
+    const content=document.getElementById('kb_content').value.trim();
+    if(!title||!content){toast('请填写完整');return;}
+    const feishuUrl=document.getElementById('kb_feishu_url')?.value.trim()||'';
+    const source=feishuUrl?'飞书导入':'手动输入';
+    if(id){
+      const k=DB.knowledge.find(x=>x.id===id);
+      Object.assign(k,{cat,title,content,source,updatedAt:Date.now()});
+      if(feishuUrl) k.feishuUrl=feishuUrl;
+    }else{
+      DB.knowledge.push({id:uid(),cat,title,content,date:todayStr(),source,feishuUrl:feishuUrl||undefined,updatedAt:Date.now()});
+    }
+    saveDB(); closeModal();
+    const el=document.getElementById('settingsKBList');
+    if(el) el.innerHTML=renderSettingsKBList();
+    toast('已保存');
+  }catch(e){
+    const q=e&&(e.name==='QuotaExceededError'||/quota/i.test(e.message||''));
+    toast(q?'⚠️ 本地存储已满，保存失败。知识库大文档建议分段存储，或稍等图片自动上传瘦身后再试':'保存失败：'+((e&&e.message)||'未知错误'));
   }
-  saveDB(); closeModal();
-  const el=document.getElementById('settingsKBList');
-  if(el) el.innerHTML=renderSettingsKBList();
-  toast('已保存');
 }
 function delKB(id){
   if(!confirm('删除此知识？')) return;
@@ -6310,7 +6328,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.2.75';
+const APP_VERSION='v2.2.76';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
@@ -6680,22 +6698,35 @@ async function slimForSync(){
   delete clone._uploadedMap;                 // 去重账本是本地用的，不传上云端
   if(!DB._uploadedMap) DB._uploadedMap = {};
   const tasks = [];
-  (clone.errors || []).forEach(e => { (e.photos || []).forEach((p, i) => { if(typeof p === 'string' && p.startsWith('data:') && p.length > 300 * 1024){
+  // v2.2.76：去掉「>300KB 才上传」门槛——所有 base64 图都进上传队列（每次 push 最多 12 张，分批自愈）。
+  // 动机：本地 22 张 base64 图占 ~200 万字符（UTF-16 口径 ~4MB），是 localStorage 写满的元凶。
+  (clone.errors || []).forEach(e => { (e.photos || []).forEach((p, i) => { if(typeof p === 'string' && p.startsWith('data:')){
     if(DB._uploadedMap[p]) e.photos[i] = DB._uploadedMap[p];   // 传过的直接用账本里的链接，跳过上传
     else tasks.push({ arr: e.photos, i, p });
   }}); });
-  (clone.reviews || []).forEach(r => { (r.photos || []).forEach((p, i) => { if(typeof p === 'string' && p.startsWith('data:') && p.length > 300 * 1024){
+  (clone.reviews || []).forEach(r => { (r.photos || []).forEach((p, i) => { if(typeof p === 'string' && p.startsWith('data:')){
     if(DB._uploadedMap[p]) r.photos[i] = DB._uploadedMap[p];
     else tasks.push({ arr: r.photos, i, p });
   }}); });
-  if(!tasks.length) return clone;
+  if(!tasks.length){ dbReplaceUploadedPhotos(); return clone; }
   for(const t of tasks.slice(0, 12)){
     try{
       const u = await uploadPhotoToStorage(t.p);
       if(u && u !== t.p){ t.arr[t.i] = u; DB._uploadedMap[t.p] = u; }   // 上传成功记到账本，下次跳过
     }catch(e){}
   }
+  dbReplaceUploadedPhotos(); // v2.2.76：上传成功的图，把 DB 本体的 base64 换成 URL（本地瘦身），随 push 成功后落盘
   return clone;
+}
+/* v2.2.76：把 DB 本体里「已上传成功」的 base64 图替换为云端 URL。
+   只替换账本里有映射的（= 云端 Storage 已确定有该图副本），不会丢图；
+   替换结果随 syncPush 成功后的 localStorage 落盘生效，本地占用立减。 */
+function dbReplaceUploadedPhotos(){
+  let n=0;
+  ['errors','reviews'].forEach(k=>(DB[k]||[]).forEach(e=>(e.photos||[]).forEach((p,i)=>{
+    if(typeof p==='string' && p.startsWith('data:') && DB._uploadedMap && DB._uploadedMap[p]){ e.photos[i]=DB._uploadedMap[p]; n++; }
+  })));
+  return n;
 }
 /* 图片上传到 Supabase Storage（bucket: wb_images，public）。成功返回公网 URL，失败返回原 dataURL */
 async function uploadPhotoToStorage(dataUrl){
