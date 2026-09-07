@@ -4952,6 +4952,111 @@ function viewKB(id){
 /* ============================================================
    渲染：设置
    ============================================================ */
+/* ===== v2.2.77：设置页「本地存储用量」可视化 ===== */
+/* localStorage 是 UTF-16 口径（每字符 2 字节），浏览器上限约 5MB（约 262 万字符）；
+   与导出文件的 UTF-8 口径不同（base64 每字符只占 1 字节），所以导出 3MB ≠ 占满 5MB */
+function fmtBytes(n){
+  if(n>=1048576) return (n/1048576).toFixed(2)+' MB';
+  if(n>=1024) return (n/1024).toFixed(1)+' KB';
+  return Math.max(0,Math.round(n))+' B';
+}
+/* 遍历 localStorage 全部键，按用途归类算占用：(key+value 字符数)×2 = UTF-16 字节 */
+function storageUsageData(){
+  const ls=window.localStorage;
+  const d={total:0,main:0,snap:0,cur:0,other:[]};
+  for(let i=0;i<ls.length;i++){
+    const k=ls.key(i), v=ls.getItem(k)||'';
+    const bytes=(k.length+v.length)*2;
+    d.total+=bytes;
+    if(k===STORAGE_KEY) d.main+=bytes;
+    else if(k.indexOf('gk_workbench_v1_local_backup_')===0){
+      if(k.slice(-4)==='_cur') d.cur+=bytes; else d.snap+=bytes;
+    }
+    else d.other.push({key:k,bytes});
+  }
+  d.other.sort((a,b)=>b.bytes-a.bytes);
+  d.pct=Math.round(d.total/(5*1024*1024)*100);
+  return d;
+}
+/* 图片统计：错题/复盘 photos 里 URL（已上云）与 base64（占本地空间）各多少 */
+function storagePhotoStats(){
+  const s={total:0,url:0,b64:0,b64Chars:0};
+  ['errors','reviews'].forEach(k=>(DB[k]||[]).forEach(e=>(e.photos||[]).forEach(p=>{
+    if(typeof p!=='string'||!p) return;
+    s.total++;
+    if(p.startsWith('data:')){ s.b64++; s.b64Chars+=p.length*2; }
+    else if(p.indexOf('http')===0) s.url++;
+  })));
+  return s;
+}
+function storageBarColor(pct){ return pct>=95?'#ef4444':pct>=80?'#f59e0b':'#22c55e'; }
+function renderStorageUsageHTML(){
+  const d=storageUsageData(), c=storageBarColor(d.pct), ps=storagePhotoStats();
+  const b64Suffix = ps.b64 ? '（占学习数据 '+(d.main?Math.round(ps.b64Chars/d.main*100):0)+'%）' : '';
+  const big = d.other.filter(o=>o.bytes>=1024), small = d.other.filter(o=>o.bytes<1024);
+  const smallBytes = small.reduce((a,b)=>a+b.bytes,0);
+  const row=(name,bytes)=>'<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:3px 0;">'
+    +'<span style="color:var(--text);">'+name+'</span>'
+    +'<span style="color:var(--text-light);white-space:nowrap;">'+fmtBytes(bytes)+'</span></div>';
+  return `
+    <div style="margin-bottom:8px;">
+      <div style="height:10px;background:var(--border);border-radius:5px;overflow:hidden;">
+        <div style="height:100%;width:${Math.min(100,d.pct)}%;background:${c};border-radius:5px;"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-light);margin-top:4px;">
+        <span>已用 <b style="color:${c};">${fmtBytes(d.total)}</b> / 约 5 MB</span><span>${d.pct}%</span>
+      </div>
+    </div>
+    ${row('📘 学习数据（错题/记录/知识库等）', d.main)}
+    ${d.snap?row('💾 同步前快照（恢复回退源，保留）', d.snap):''}
+    ${d.cur?row('📄 恢复副本 _cur（可清理）', d.cur):''}
+    ${d.other.filter(o=>o.bytes>=1024).slice(0,5).map(o=>row('· '+escapeHtml(o.key.length>26?o.key.slice(0,26)+'…':o.key), o.bytes)).join('')}
+    ${small.length?row('· 其他杂项键（'+small.length+'个）', smallBytes):''}
+    <div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:6px 0 3px;border-top:1px dashed var(--border);margin-top:4px;">
+      <span style="color:var(--text);">🖼️ 图片：共 ${ps.total} 张</span>
+      <span style="color:var(--text-light);white-space:nowrap;">URL ${ps.url} 张 · 本地 base64 ${ps.b64} 张${b64Suffix}</span>
+    </div>
+    <div id="storageEstLine" style="font-size:11px;color:var(--text-light);margin-top:2px;">浏览器总配额查询中…</div>
+    <div style="display:flex;gap:8px;margin-top:10px;">
+      <button class="btn btn-sm" onclick="storagePushPhotos()" style="flex:1;">📤 上传本地图片</button>
+      <button class="btn btn-sm btn-outline" onclick="storageClearCur()" style="flex:1;">清理恢复副本</button>
+    </div>`;
+}
+/* 异步补浏览器总配额（含 IndexedDB/缓存等，localStorage 只占其中一小块） */
+function fillStorageEstimate(){
+  setTimeout(async ()=>{
+    const el=document.getElementById('storageEstLine');
+    if(!el) return;
+    try{
+      if(navigator.storage&&navigator.storage.estimate){
+        const est=await navigator.storage.estimate();
+        el.textContent='浏览器总占用（含 IndexedDB/缓存）：'+fmtBytes(est.usage||0)+(est.quota?' / 配额约 '+fmtBytes(est.quota):'');
+      }else el.textContent='当前浏览器不支持总配额查询';
+    }catch(e){ el.textContent='总配额查询失败'; }
+  },100);
+}
+/* 手动触发一轮图片上传：syncPush 内部走 slimForSync，每轮最多 12 张，传完自动落盘瘦身 */
+async function storagePushPhotos(){
+  if(!supabaseClient){ toast('云端未连接，请先在下方配置 Supabase'); return; }
+  if(!storagePhotoStats().b64){ toast('没有本地 base64 图片需要上传'); return; }
+  toast('开始上传（每轮最多 12 张）…');
+  await syncPush();
+  renderSettings();
+}
+/* 清理「从快照恢复」时自动留的恢复前备份（…_cur）：云端有完整数据，删除不影响使用 */
+function storageClearCur(){
+  const ls=window.localStorage, keys=[];
+  for(let i=0;i<ls.length;i++){
+    const k=ls.key(i);
+    if(k.indexOf('gk_workbench_v1_local_backup_')===0 && k.slice(-4)==='_cur') keys.push(k);
+  }
+  if(!keys.length){ toast('没有可清理的恢复副本'); return; }
+  let bytes=0; keys.forEach(k=>{ bytes+=(k.length+(ls.getItem(k)||'').length)*2; });
+  if(!confirm('删除 '+keys.length+' 个恢复副本（'+fmtBytes(bytes)+'）？\n这是「从快照恢复」时自动保存的恢复前备份，云端还有完整数据，删除不影响正常使用。')) return;
+  keys.forEach(k=>ls.removeItem(k));
+  toast('已清理 '+fmtBytes(bytes));
+  renderSettings();
+}
 function renderSettings(){
   const autoBackup = DB.settings.autoBackup || false;
   const lastBackup = DB.settings.lastBackupTime || '从未';
@@ -4982,6 +5087,10 @@ function renderSettings(){
         <div><div class="s-name">🔄 重置并重新加载</div><div class="s-desc">清除页面缓存并重新加载最新版本（不影响学习记录）</div></div>
         <button class="btn btn-sm" onclick="hardReset()">一键重置</button>
       </div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="left"><span class="emoji">💾</span>本地存储用量</span></div>
+      <div id="storageUsageBox">${renderStorageUsageHTML()}</div>
     </div>
     <div class="card">
       <div class="card-title"><span class="left"><span class="emoji">⏰</span>定时推送提醒</span>
@@ -5052,6 +5161,7 @@ function renderSettings(){
     <div class="card" style="text-align:center;color:var(--text-light);font-size:12px;">
       公考学习工作台 · ${APP_VERSION} · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
+  fillStorageEstimate();
 }
 /* 易错考点操作 */
 let _mistakeEditSub='';
@@ -6328,7 +6438,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.2.76';
+const APP_VERSION='v2.2.77';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
