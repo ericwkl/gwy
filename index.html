@@ -1099,6 +1099,9 @@ function delMistakeFromDetail(id){
    渲染：计划页（作息规划表 + 每日任务 + 每周计划）
    ============================================================ */
 function renderPlan(){
+  // v2.2.75：渲染前兜底清一次上周勾（幂等，只看 updatedAt；本周新勾不动）。
+  // 保证打开计划页看到的就是干净的，不必等同步/重置那"唯一一次机会"。
+  if(clearLastWeekDone()) saveDB(); // 只落本地，推送交给正常同步链路，避免渲染时触发同步风暴
   const today = todayStr();
   const now = new Date();
   const weekIdx = now.getDay(); // 0=周日
@@ -1148,28 +1151,35 @@ function migrateDailyToWeekly(){
     saveDB();
   }
 }
+/* v2.2.75：按时间戳清「上周勾」——done=true 且 updatedAt 早于本周一 00:00。
+   幂等：多跑几次结果一样，只看 updatedAt 这个硬证据，不依赖 lastWeekMonday 开关。
+   本周新勾（updatedAt >= 本周一 00:00）一律不动，不会误伤。 */
+function clearLastWeekDone(){
+  const _now=new Date(), _wi=_now.getDay();
+  const _monday=new Date(_now); _monday.setDate(_now.getDate()-(_wi===0?6:_wi-1));
+  const _weekStartTs=new Date(_monday.getFullYear(),_monday.getMonth(),_monday.getDate()).getTime();
+  let changed=false;
+  (DB.weekTasks||[]).forEach(t=>{
+    if(t.done && (t.updatedAt||0) < _weekStartTs){ t.done=false; changed=true; }
+  });
+  return changed;
+}
 /* 新周自动重置：本周一日期与上次记录不同时，把所有 weekTasks 的 done 重置为 false。
-   记录本周一日期到 DB.settings.lastWeekMonday，防止重复重置。 */
+   记录本周一日期到 DB.settings.lastWeekMonday，防止重复重置。
+   v2.2.75：清勾改为无条件幂等（clearLastWeekDone），不再由 lastWeekMonday 单点开关控制——
+   旧写法"只在换周那一次清"，一旦被同步回来的旧勾覆盖就再没机会清（9-07 周一复现：66 条上周勾清不掉）。
+   重置不更新 updatedAt（沿用 v2.2.62）：擦勾是本地业务动作，改戳会让 done=false 在跨设备合并中
+   顶掉另一台设备刚勾的 done=true。 */
 function resetWeekDoneIfNeeded(monday){
   const mondayStr=localDateStr(monday);
   if(!DB.settings) DB.settings={};
+  const changed=clearLastWeekDone(); // v2.2.75：先无条件按时间戳清上周勾（幂等，可被任意入口重复调用）
   if(DB.settings.lastWeekMonday !== mondayStr){
-    // v2.2.63：只清"上周"的勾（updatedAt 早于本周一 00:00），保留本周新勾，
-    // 避免把用户本周刚勾的 done=true 误清。无时间戳(0)视为旧勾一并清。
-    const weekStartTs=new Date(monday.getFullYear(), monday.getMonth(), monday.getDate()).getTime();
-    let changed=false;
-    (DB.weekTasks||[]).forEach(t=>{
-      if(t.done && (t.updatedAt||0) < weekStartTs){
-        t.done=false;
-        // v2.2.62：重置不更新 updatedAt——重置是本地业务动作（每周一自动擦勾），
-        // 不是用户编辑。更新会让 done=false 携带"最新时间戳"顶替另一台设备已勾选
-        // 的 done=true（updatedAt 更旧）在合并中获胜，导致跨设备吞勾。
-        changed=true;
-      }
-    });
     DB.settings.lastWeekMonday=mondayStr;
-    if(changed){ saveDB(); syncPush(); } // v2.2.63: 清零后立即推送上云，防止云端旧勾被 pull 并回
+    saveDB(); syncPush(); setTimeout(()=>syncPush(),2000); // 换周本身落库+推送；补推防首次 push 被并发守卫跳过
+    return;
   }
+  if(changed){ saveDB(); syncPush(); setTimeout(()=>syncPush(),2000); }
 }
 /* 周计划：横向星期选择（今天默认选中），下方显示当天任务 */
 let weekTab=-1; // 当前选中星期索引(0-6)，-1=自动定位今天
@@ -6300,7 +6310,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.2.74';
+const APP_VERSION='v2.2.75';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
@@ -7023,11 +7033,11 @@ async function _syncPullAndMergeInner(){
     const _cnw=new Date(), _cwi=_cnw.getDay();
     const _cmon=new Date(_cnw); _cmon.setDate(_cnw.getDate()-(_cwi===0?6:_cwi-1));
     const _cweekStartTs=new Date(_cmon.getFullYear(),_cmon.getMonth(),_cmon.getDate()).getTime();
-    const _cloudInNewWeek=!!(cloud.settings && cloud.settings.lastWeekMonday===localDateStr(_cmon));
-    if(_cloudInNewWeek){
-      (DB.weekTasks||[]).forEach(t=>{ if(t.done && (t.updatedAt||0)<_cweekStartTs) t.done=false; });
-      (cloud.weekTasks||[]).forEach(t=>{ if(t.done && (t.updatedAt||0)<_cweekStartTs) t.done=false; });
-    }
+    // v2.2.75：不再要求"云端已进入新周"——以 updatedAt 为硬证据，无条件清洗两端上周勾。
+    // 旧条件（云端 lastWeekMonday===本周一）在新周首次打开时不成立：云端的还是上周值，
+    // 于是跳过清洗，下面的"勾只增不减"把云端 66 条上周勾并回本地，清一次白清（9-07 复现）。
+    (DB.weekTasks||[]).forEach(t=>{ if(t.done && (t.updatedAt||0)<_cweekStartTs) t.done=false; });
+    (cloud.weekTasks||[]).forEach(t=>{ if(t.done && (t.updatedAt||0)<_cweekStartTs) t.done=false; });
     const merged = mergeLocalCloud(DB, cloud);
     DB = merged;
     if(!Array.isArray(DB.weekTasks)) DB.weekTasks=[];
