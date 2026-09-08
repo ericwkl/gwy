@@ -4362,7 +4362,7 @@ async function renderAccu(){
   const seed=getAccuSeed();
   // v2.2.57：缓存带版本号——解析/渲染逻辑升级时手动+1，强制旧版本渲染的缓存 HTML 失效，
   // 防止跨版本复用旧缓存（如 v2.2.55 渲染的【莫此】拆词 HTML 在 v2.2.56 下继续命中）
-  const ACCU_CACHE_VER=7;
+  const ACCU_CACHE_VER=8;   // v2.2.79：广东要闻排序逻辑变更，旧渲染缓存失效
   // 知识库签名：条数+最新更新时间，知识库变化时缓存自动失效
   const kbItems=DB.knowledge||[];
   const kbSig=kbItems.length+'_'+(kbItems.length?Math.max(...kbItems.map(k=>k.updatedAt||0)):0);
@@ -4412,14 +4412,14 @@ async function renderAccu(){
             return `<div style="padding:3px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);white-space:pre-wrap;word-break:break-all;">${linkify(line)}</div>`;
           }).join('')}</div></details>`;
         }
-        cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span class="section-tag">${fmtNewsTime(liveNews.t)||'实时'}</span></div>${newsSections}</div>`;
+        cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span style="display:flex;align-items:center;gap:6px;"><span class="section-tag">${fmtNewsTime(liveNews.t)||'实时'}</span><button class="btn btn-sm btn-ghost" style="padding:1px 7px;font-size:11px;" onclick="refreshLiveNews()">↻ 刷新</button></span></div>${newsSections}</div>`;
       }else{
         // 离线兜底
         const gdPool=SZ_HOT_POOL.filter(h=>h.isGD);
         const otherPool=SZ_HOT_POOL.filter(h=>!h.isGD);
         const hot=[...dailyPick(gdPool,20260810,2), ...dailyPick(otherPool,20260811,4)];
         newsSections=`<details open style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--primary);cursor:pointer;padding:4px 0;">近期热点</summary><div>${hot.map(h=>`<div style="padding:3px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);white-space:pre-wrap;word-break:break-all;">${linkify('· ['+h.date+'] '+h.title+(h.url?'\n  '+h.url:''))}</div>`).join('')}</div></details>`;
-        cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span class="section-tag">近期</span></div>${newsSections}</div>`;
+        cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span style="display:flex;align-items:center;gap:6px;"><span class="section-tag">近期</span><button class="btn btn-sm btn-ghost" style="padding:1px 7px;font-size:11px;" onclick="refreshLiveNews()">↻ 刷新</button></span></div>${newsSections}</div>`;
       }
       // 也显示KB中的时政条目（如果有），逐行解析同常识/政治理论
       const kbItems=DB.knowledge.filter(k=>cat.cats.includes(k.cat));
@@ -4963,11 +4963,12 @@ function fmtBytes(n){
 /* 遍历 localStorage 全部键，按用途归类算占用：(key+value 字符数)×2 = UTF-16 字节 */
 function storageUsageData(){
   const ls=window.localStorage;
-  const d={total:0,main:0,snap:0,cur:0,other:[]};
+  const d={total:0,chars:0,main:0,snap:0,cur:0,other:[]};
   for(let i=0;i<ls.length;i++){
     const k=ls.key(i), v=ls.getItem(k)||'';
-    const bytes=(k.length+v.length)*2;
-    d.total+=bytes;
+    const chars=k.length+v.length;
+    const bytes=chars*2;
+    d.total+=bytes; d.chars+=chars;
     if(k===STORAGE_KEY) d.main+=bytes;
     else if(k.indexOf('gk_workbench_v1_local_backup_')===0){
       if(k.slice(-4)==='_cur') d.cur+=bytes; else d.snap+=bytes;
@@ -4978,6 +4979,27 @@ function storageUsageData(){
   d.pct=Math.round(d.total/(5*1024*1024)*100);
   return d;
 }
+/* ===== v2.2.78：localStorage 配额实测 =====
+   「约 5MB」只是 Chrome 标准，华为等浏览器配额口径不同（实测 5.49MB 还能正常写）。
+   写探针逐步逼近真实可写字符上限：每次往测试键写一块字符串，写不进即停；测完即删。
+   探测值缓存（每页面刷新只测一次），失败回退标准值 2621440 字符（=5MB UTF-16）。 */
+let _lsProbeCache=null;
+function probeLSChars(){
+  if(_lsProbeCache) return _lsProbeCache;
+  const ls=window.localStorage, KEY='gk_quota_probe';
+  const STEP=262144;   // 步长 26.2 万字符（≈0.5MB UTF-16）
+  const MAX=5242880;   // 探测上限 524 万字符（≈10MB UTF-16），足够覆盖任何壳浏览器
+  let hi=0;
+  try{
+    for(let c=STEP; c<=MAX; c+=STEP){
+      try{ ls.setItem(KEY,'x'.repeat(c)); hi=c; }catch(e){ break; }
+    }
+  }catch(e){}
+  try{ ls.removeItem(KEY); }catch(e){}
+  _lsProbeCache={chars: hi||2621440, probed: hi>0};
+  return _lsProbeCache;
+}
+function fmtWan(n){ return n>=10000 ? ((n/10000).toFixed(n>=1000000?0:1)+' 万') : String(n); }
 /* 图片统计：错题/复盘 photos 里 URL（已上云）与 base64（占本地空间）各多少 */
 function storagePhotoStats(){
   const s={total:0,url:0,b64:0,b64Chars:0};
@@ -5001,10 +5023,11 @@ function renderStorageUsageHTML(){
   return `
     <div style="margin-bottom:8px;">
       <div style="height:10px;background:var(--border);border-radius:5px;overflow:hidden;">
-        <div style="height:100%;width:${Math.min(100,d.pct)}%;background:${c};border-radius:5px;"></div>
+        <div id="storageUsageBar" style="height:100%;width:${Math.min(100,d.pct)}%;background:${c};border-radius:5px;transition:width .3s;"></div>
       </div>
       <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-light);margin-top:4px;">
-        <span>已用 <b style="color:${c};">${fmtBytes(d.total)}</b> / 约 5 MB</span><span>${d.pct}%</span>
+        <span>已用 <b id="storageUsageMain" style="color:${c};">${fmtBytes(d.total)}</b> / <span id="storageUsageDenom">约 5 MB（Chrome 标准）</span></span>
+        <span id="storageUsagePct">${d.pct}%</span>
       </div>
     </div>
     ${row('📘 学习数据（错题/记录/知识库等）', d.main)}
@@ -5021,6 +5044,27 @@ function renderStorageUsageHTML(){
       <button class="btn btn-sm" onclick="storagePushPhotos()" style="flex:1;">📤 上传本地图片</button>
       <button class="btn btn-sm btn-outline" onclick="storageClearCur()" style="flex:1;">清理恢复副本</button>
     </div>`;
+}
+/* 异步实测配额：写探针逼近本浏览器真实可写字符数，覆盖进度条分母/百分比（华为等壳浏览器≠5MB）。
+   探针测的是「当前状态下还能写多少」，总配额 ≈ 还能写 + 已用 */
+function fillStorageQuota(){
+  setTimeout(()=>{
+    const bar=document.getElementById('storageUsageBar');
+    if(!bar) return;   // 用户已切走页面
+    const d=storageUsageData();
+    const probe=probeLSChars();
+    const quotaChars = probe.probed ? (probe.chars + d.chars) : 2621440;
+    const realPct=Math.round(d.chars/quotaChars*100);
+    const c=storageBarColor(realPct);
+    bar.style.width=Math.min(100,realPct)+'%';
+    bar.style.background=c;
+    const mainEl=document.getElementById('storageUsageMain');
+    if(mainEl){ mainEl.textContent=fmtBytes(d.total)+'（'+fmtWan(d.chars)+'字符）'; mainEl.style.color=c; }
+    const denomEl=document.getElementById('storageUsageDenom');
+    if(denomEl) denomEl.textContent = probe.probed ? ('实测配额约 '+fmtWan(quotaChars)+'字符'+(probe.chars>=5242880?'以上':'')) : '约 5 MB（标准估算）';
+    const pctEl=document.getElementById('storageUsagePct');
+    if(pctEl) pctEl.textContent=realPct+'%';
+  },150);
 }
 /* 异步补浏览器总配额（含 IndexedDB/缓存等，localStorage 只占其中一小块） */
 function fillStorageEstimate(){
@@ -5058,6 +5102,7 @@ function storageClearCur(){
   renderSettings();
 }
 function renderSettings(){
+  try{ if(migrateUploadedMap()) saveDB(); }catch(e){}   // v2.2.78：进设置页顺手把旧 base64 账本迁成指纹 key（本地立省 ~4MB，随下次同步落盘）
   const autoBackup = DB.settings.autoBackup || false;
   const lastBackup = DB.settings.lastBackupTime || '从未';
   const dirHandle = DB.settings.backupDirHandle;
@@ -5162,6 +5207,7 @@ function renderSettings(){
       公考学习工作台 · ${APP_VERSION} · 数据本地存储<br>祝备考顺利，成功上岸
     </div>`;
   fillStorageEstimate();
+  fillStorageQuota();
 }
 /* 易错考点操作 */
 let _mistakeEditSub='';
@@ -6223,6 +6269,16 @@ function parseGovLocal(html){
   }
   return items;
 }
+/* v2.2.79：合并广东要闻——以官网（直连）顺序为主序，代理独有的补在后面。
+   旧逻辑是「代理在前 + 直连补全 push 到末尾」，而广东要闻只显示前 3 条，
+   导致代理漏抓的最新要闻（如 2026-09-07 省委党校开学典礼，官网排第 2）沉底永不显示。
+   官网顺序 = 编辑排的最新在前，最可信；代理只作网络不通时的兜底补漏。 */
+function mergeGdNews(proxyList, directList){
+  const out=[], seen=new Set();
+  (directList||[]).forEach(x=>{ const k=(x.url||'').split('#')[0]; if(k&&!seen.has(k)){ seen.add(k); out.push(x); } });
+  (proxyList||[]).forEach(x=>{ const k=(x.url||'').split('#')[0]; if(k&&!seen.has(k)){ seen.add(k); out.push(x); } });
+  return out;
+}
 /* 手机端直连广东省政府网"要闻"栏目解析（正则与代理端一致，同时匹配 post_ 与 mpost_ 移动版链接）。
    v2.2.48: 作为"广东要闻"的直连兜底——代理只抓 PC 版 post_ 链接、漏掉 mpost_ 移动版（如 2026-08-21
    高等教育高质量发展座谈会 mpost_4945564），直连从官网源抓取可补全，根治漏抓 */
@@ -6292,8 +6348,8 @@ async function fetchLiveNews(force){
       const html=await res.text();
       const gdDirect=parseGdLocal(html);
       if(gdDirect.length){
-        const urlSet=new Set(result.gd.map(x=>x.url));
-        for(const x of gdDirect){ if(!urlSet.has(x.url)){ result.gd.push(x); urlSet.add(x.url); } }
+        // v2.2.79：以官网顺序为主序（旧逻辑把直连补全的 push 到末尾，最新要闻沉底不显示）
+        result.gd=mergeGdNews(result.gd, gdDirect);
         if(result.via==='代理') result.via='代理+直连';
       }
     }
@@ -6306,6 +6362,17 @@ function fmtNewsTime(ts){
   const d=new Date(ts);
   const p=n=>String(n).padStart(2,'0');
   return p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes());
+}
+/* v2.2.79：手动强制刷新每日时政（每日时政卡右上角「↻ 刷新」）。
+   缓存有两层，都要清，否则会出现"点了刷新但内容没变"：
+   ① 新闻缓存 NEWS_CACHE_KEY（30 分钟）→ removeItem；
+   ② 积累页渲染缓存 DB.accuHtmlCache（同一天+同种子直接复用旧 HTML）→ 置空 */
+async function refreshLiveNews(){
+  try{ toast('正在重新抓取时政新闻…'); }catch(e){}
+  try{ localStorage.removeItem(NEWS_CACHE_KEY); }catch(e){}
+  try{ DB.accuHtmlCache=null; }catch(e){}
+  try{ await fetchLiveNews(true); }catch(e){}
+  try{ await renderAccu(); toast('已更新'); }catch(e){}
 }
 
 async function generateMorningPush(){
@@ -6438,7 +6505,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.2.77';
+const APP_VERSION='v2.2.79';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
@@ -6796,33 +6863,66 @@ function scheduleSyncPush(){
     if(cfg.auto !== false && supabaseClient && SYNC_STATE !== 'off') syncPush();
   }, 3000);
 }
+/* ===== v2.2.78：图片去重账本指纹化 =====
+   旧账本用完整 base64 当 key——22 张图换 URL 后，photos 瘦了但账本里的 base64 key 还躺着
+   （~215 万字符 ≈ 4.1MB，是本地"已用 5.49MB"的主犯）。改用「长度+尾段」短指纹当 key，
+   碰撞后果只是少传一次（value 是云端 URL），不丢数据。 */
+function b64Fingerprint(p){ return 'b64' + p.length + '_' + p.slice(-64); }
+/* 查账本：先查指纹 key（新账本），再查原串 key（兼容旧账本，避免重传） */
+function uploadedGet(p){
+  if(!DB._uploadedMap) return null;
+  return DB._uploadedMap[b64Fingerprint(p)] || DB._uploadedMap[p] || null;
+}
+/* 幂等迁移：把账本里 data: 开头的 base64 key 换成指纹 key；返回迁移条数。
+   迁移成功时若「同步前快照」存在则同步重写为瘦版——否则肥账本在快照里会再躺到下次 pull */
+function migrateUploadedMap(){
+  if(!DB._uploadedMap) return 0;
+  let n=0; const out={};
+  Object.keys(DB._uploadedMap).forEach(k=>{
+    const v = DB._uploadedMap[k];
+    if(typeof k==='string' && k.startsWith('data:')){ out[b64Fingerprint(k)]=v; n++; }
+    else out[k]=v;
+  });
+  if(n){
+    DB._uploadedMap = out;
+    try{
+      const sk = 'gk_workbench_v1_local_backup_' + getSyncKey();
+      if(window.localStorage.getItem(sk)) window.localStorage.setItem(sk, JSON.stringify(DB));
+    }catch(e){}
+  }
+  return n;
+}
 /* 同步前瘦身：把错题/复盘中 >300KB 的截图 base64 上传到 Supabase Storage（原图不压缩），
    数据库只存图片链接，避免整库超出 PostgREST 请求体上限；小图直接保留 base64。
    v2.2.47: 加去重账本 _uploadedMap —— 已上传过的图不再重复传（之前每次 push 都重传所有大图，
-   图多就超 45s 超时 → 显示"断开"）。本地 photos 仍是 base64（离线可看），账本只用于 push 去重，不上云 */
+   图多就超 45s 超时 → 显示"断开"）。本地 photos 仍是 base64（离线可看），账本只用于 push 去重，不上云
+   v2.2.78: 账本 key 指纹化 + 开头幂等迁移旧账本（迁移随 push 落盘） */
 async function slimForSync(){
   const clone = JSON.parse(JSON.stringify(DB));
   delete clone.accuHtmlCache;
   delete clone.accuYySeen;                    // 近7天已展示去重记录是本地用的，不传上云端
   delete clone.yyPickCache;                   // v2.2.73：言语素材当天已抽批次，本地缓存不上云（同词库同日期另一设备自行确定性重抽，结果一致）
   delete clone._uploadedMap;                 // 去重账本是本地用的，不传上云端
+  migrateUploadedMap();                       // v2.2.78：旧 base64 key → 指纹 key，本地立省 ~4MB
   if(!DB._uploadedMap) DB._uploadedMap = {};
   const tasks = [];
   // v2.2.76：去掉「>300KB 才上传」门槛——所有 base64 图都进上传队列（每次 push 最多 12 张，分批自愈）。
   // 动机：本地 22 张 base64 图占 ~200 万字符（UTF-16 口径 ~4MB），是 localStorage 写满的元凶。
   (clone.errors || []).forEach(e => { (e.photos || []).forEach((p, i) => { if(typeof p === 'string' && p.startsWith('data:')){
-    if(DB._uploadedMap[p]) e.photos[i] = DB._uploadedMap[p];   // 传过的直接用账本里的链接，跳过上传
+    const hit = uploadedGet(p);
+    if(hit) e.photos[i] = hit;   // 传过的直接用账本里的链接，跳过上传
     else tasks.push({ arr: e.photos, i, p });
   }}); });
   (clone.reviews || []).forEach(r => { (r.photos || []).forEach((p, i) => { if(typeof p === 'string' && p.startsWith('data:')){
-    if(DB._uploadedMap[p]) r.photos[i] = DB._uploadedMap[p];
+    const hit = uploadedGet(p);
+    if(hit) r.photos[i] = hit;
     else tasks.push({ arr: r.photos, i, p });
   }}); });
   if(!tasks.length){ dbReplaceUploadedPhotos(); return clone; }
   for(const t of tasks.slice(0, 12)){
     try{
       const u = await uploadPhotoToStorage(t.p);
-      if(u && u !== t.p){ t.arr[t.i] = u; DB._uploadedMap[t.p] = u; }   // 上传成功记到账本，下次跳过
+      if(u && u !== t.p){ t.arr[t.i] = u; DB._uploadedMap[b64Fingerprint(t.p)] = u; }   // 上传成功记指纹到账本，下次跳过
     }catch(e){}
   }
   dbReplaceUploadedPhotos(); // v2.2.76：上传成功的图，把 DB 本体的 base64 换成 URL（本地瘦身），随 push 成功后落盘
@@ -6830,11 +6930,12 @@ async function slimForSync(){
 }
 /* v2.2.76：把 DB 本体里「已上传成功」的 base64 图替换为云端 URL。
    只替换账本里有映射的（= 云端 Storage 已确定有该图副本），不会丢图；
-   替换结果随 syncPush 成功后的 localStorage 落盘生效，本地占用立减。 */
+   替换结果随 syncPush 成功后的 localStorage 落盘生效，本地占用立减。
+   v2.2.78：查账本走 uploadedGet（兼容指纹 key 与旧 base64 key）。 */
 function dbReplaceUploadedPhotos(){
   let n=0;
   ['errors','reviews'].forEach(k=>(DB[k]||[]).forEach(e=>(e.photos||[]).forEach((p,i)=>{
-    if(typeof p==='string' && p.startsWith('data:') && DB._uploadedMap && DB._uploadedMap[p]){ e.photos[i]=DB._uploadedMap[p]; n++; }
+    if(typeof p==='string' && p.startsWith('data:')){ const hit=uploadedGet(p); if(hit){ e.photos[i]=hit; n++; } }
   })));
   return n;
 }
