@@ -691,7 +691,10 @@ function ebbNextFromToday(completed){ // 差分顺延：完成第 completed 轮�
 }
 function ebbInit(base){
   // v2.2.74：录入当天=第1轮，当天就进入待复习列表（next=base），点完进入下一轮。
-  return {stage:0, base, next:base, done:false};
+  // v2.2.82：必须带 _v72 免役标记！旧版不带，而 v2.2.72 的 shiftStage 迁移每次加载都会跑
+  //   （幂等全靠 _v72），导致「新录入后第一次点已掌握(stage 0→1)」的条目在下次刷新页面时
+  //   被误减回 stage=0——表现为"昨天明明点了已掌握，今天又显示第1轮"。
+  return {stage:0, base, next:base, done:false, _v72:1};
 }
 /* 存量数据不做迁移：旧排期 next 仍是"未来某个复习日"，日期本身有效，直接沿用即可；
    逾期条目本来就该今天补做，补做后自然切换为顺延模型。此处 ebbFixOld 仅做轻量兜底：
@@ -4248,6 +4251,11 @@ function extractYyWords(kbItems){
           if(/^\d+[.、]\s*\S/.test(ln)) break;                          // 下一个编号词条
           if(/^[一二三四五六七八九十]+[、．.]/.test(ln)) break;          // 模块标题
           if(/^（[一二三四五六七八九十\d]+）/.test(ln)) break;           // 小节标题
+          // v2.2.80：无冒号短行且无句读标点 → 下一组标题（如"与发展相关的词语""大规模、快速的变化"
+          // "总开关/压舱石/定盘星/助推器"），不是例句，结束扫描。原逻辑"≥6字即例句"把这类行
+          // 误挂到上一词条（用户反馈"江心补漏""异质性"混入别组内容）。判据：≤20字符且不含
+          // 逗号/句号/问号等句读符号——真例句/例文是带标点的句子或长段落，不会被误伤
+          if(ln.length<=20 && !/[，。！？；…]/.test(ln)) break;
           if(ln.length>=6 && !/^用途[：:]/.test(ln)) exs.push(ln);       // 例句/诗行
           else break;
         }
@@ -6239,14 +6247,23 @@ const SZ_HOT_POOL=[
    通道2：gov.cn 直连（file:// 下 gov.cn 放行 CORS，实测可用，作为 gov 双保险）
    缓存 30 分钟，避免每次刷新都耗流量 */
 const NEWS_PROXY='https://a2cd80842a90bd0f0.gz5.agentos-app.net';
+/* v2.2.81：同源新闻代理——Cloudflare Pages Function（源码见仓库 functions/api/news.js），
+   与页面同域（gwy-6n1.pages.dev），天然无 CORS，也不依赖外部沙箱（那台会休眠/失联）。
+   起因：公网代理抓广东要闻长期漏条（官网 20 条只回 12 条，2026-09-07 省委党校开学典礼等
+   8 条拿不到），同源代理做主通道，取不到再回退公网代理。 */
+const NEWS_PROXY_SAME='/api/news';
 const NEWS_CACHE_KEY='gk_news_cache_v1';
 async function fetchProxyNews(src){
-  try{
-    const r=await fetch(NEWS_PROXY+'/api/news?src='+src,{signal:AbortSignal.timeout(12000)});
-    if(!r.ok) return [];
-    const j=await r.json();
-    return (j.items||[]).map(x=>({title:(x.t||'').trim(),url:(x.u||'').trim(),date:(x.d||'').trim(),src:(x.s||'').trim(),digest:(x.digest||'').trim()}));
-  }catch(e){ return []; }
+  for(const base of [NEWS_PROXY_SAME, NEWS_PROXY+'/api/news']){
+    try{
+      const r=await fetch(base+'?src='+src,{signal:AbortSignal.timeout(12000)});
+      if(!r.ok) continue;
+      const j=await r.json();
+      const items=(j.items||[]).map(x=>({title:(x.t||'').trim(),url:(x.u||'').trim(),date:(x.d||'').trim(),src:(x.s||'').trim(),digest:(x.digest||'').trim()})).filter(x=>x.title);
+      if(items.length) return items;
+    }catch(e){ /* 换下一个通道 */ }
+  }
+  return [];
 }
 /* 手机端直连 gov.cn 首页解析（正则与代理端一致） */
 function parseGovLocal(html){
@@ -6505,7 +6522,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.2.79';
+const APP_VERSION='v2.2.82';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
@@ -6570,6 +6587,27 @@ function init(){
     };
     shiftStage(DB.errorEbb); shiftStage(DB.mistakeEbb);
     if(_ebbShiftChanged) saveDB();
+  }
+  // v2.2.82：抢救被 shiftStage 误减的条目。ebbInit 旧版不带 _v72，v2.2.72 之后新录入的
+  //   条目第一次点「已掌握」(stage 0→1) 后，下次页面加载被 shiftStage 误减回 0 并打标
+  //   （next 保持顺延值不动）——用户看到"昨天点了已掌握，今天显示第1轮"。
+  //   特征唯一：_v72 已打 + stage=0 + 未 done 未 pending + next>base。stage=0 时 next 本应
+  //   =base（ebbInit）或挂 pending（待复习），next 被顺延过只可能来自「已掌握」后的差分顺延，
+  //   即该条目实际完成过第 1 轮。纠回 stage=1，next 不动（到期日不变，仅轮次显示归位）。
+  //   幂等：纠完 stage=1 不再命中；正常条目（pending 挂起 / stage=0 且 next=base / stage≥1 / done）均不命中。
+  {
+    let _ebbRescueChanged=false;
+    const rescueStage=(ebb)=>{
+      if(!ebb) return;
+      Object.values(ebb).forEach(st=>{
+        if(!st||!st._v72||st.done||st.pending) return;
+        if((st.stage||0)===0 && st.base && st.next && st.next>st.base){
+          st.stage=1; _ebbRescueChanged=true;
+        }
+      });
+    };
+    rescueStage(DB.errorEbb); rescueStage(DB.mistakeEbb);
+    if(_ebbRescueChanged) saveDB();
   }
   // v2.2.37：把"轮次已满但未标已掌握"的历史数据补齐（幂等，每台设备各自修本地，不依赖标记避免同步传播 race）。
   // v2.2.34 之前完成阈值为>=6，第5轮完成后不会置 done，存量条目需补标已掌握
