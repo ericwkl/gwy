@@ -4239,6 +4239,16 @@ function extractYyWords(kbItems){
     while((m=re2a.exec(txt))){
       const word=m[1], body=m[2].trim();
       if(/积累$/.test(word)||/^(高频|易混|生词|词语|词汇|近义|反义|辨析)$/.test(word)||/诗云|诗曰|[^]云$|曰$/.test(word)) continue;
+      // v2.2.83：跳过"编号+词名独占一行"词条下方的"出处：…"行——
+      // 该行形如"出处：宋·朱熹《观书有感》…"，会被 re2a 当成"词：释义"产生一条【出处】，
+      // 与编号词条（【源头活水】）内容重复。判据：该行前一行是"数字. 纯词名"。
+      // v2.2.83 修正：word 是正则分组内容（"出处"），本身不含冒号，故不能用 /^出处\s*[：:]/
+      // 判据：组内容恰为"出处"，且匹配行前一行是"数字. 纯词名"（该词条的标题行）
+      {
+        const before=txt.slice(0,m.index).split(/\n/).map(s=>s.trim()).filter(Boolean);
+        const prev=before[before.length-1]||'';
+        if(word==='出处' && /^\d+[.、]\s*[\u4e00-\u9fa5]{2,8}$/.test(prev)) continue;
+      }
       if(!seen.has(word)){
         seen.add(word);
         // 往后扫例句行：匹配位置之后的行，到下一个词条/编号/模块标题为止
@@ -4288,18 +4298,35 @@ function extractYyWords(kbItems){
       if(w.length<2||w.length>8) return false;
       if(/[:：]/.test(w)) return false;               // 含冒号→标准"词：释义"格式
       if(/[。！？.：；，、]$/.test(w)) return false;     // 不以标点结尾
-      if(/^[（(【\d#*]/.test(w)) return false;          // 不以（/(/【/数字/#* 开头
+      if(/^[（(【#*]/.test(w)) return false;           // 不以（/(/【/#/* 开头
+      // v2.2.83：数字开头只在"纯编号行/编号+标点"时才排除（如"1."、"2、"），
+      // 词名本身以数字开头（如"5G基站""3D打印"）应保留
+      if(/^\d+[.、]?\s*$/.test(w)) return false;
       if(/积累$/.test(w)||/^(高频词|易混淆词语|生词|正确搭配|文段积累)$/.test(w)) return false;
       return true;
     };
     for(let i=0;i<lines.length;i++){ // 遍历到末行：空格分隔词条自带释义，最后一行也可成词条
       let cur=lines[i].replace(/^[【】\s]+|[【】\s]+$/g,'');
       let inlineRest=null;
+      /* v2.2.83：编号+词名独占一行（如"15. 源头活水"）——修复"源头活水"只剩出处。
+         原因：这类行是"编号 词名"但同行无冒号，re2a（要求"词：释义"）不匹配，
+         独立行词条又因 /^[（(【\d#*]/ 把它当编号行直接跳过 → 词名整行被丢弃，
+         紧接的"出处：宋·朱熹…"反被 re2a 当成"词：释义"接走，标题变成【出处】。
+         这里把"编号 词名"剥离出纯词名，令其成为本条词条的标题。 */
+      let isNumberedWord=false;
+      if(/^\d+[.、]\s*\S/.test(cur)){
+        const nw=cur.replace(/^\d+[.、]\s*/,'').trim();
+        // v2.2.83：词名允许含数字/字母（如"一拖五""5G"），仅排除冒号、标点结尾等非法情形，
+        // 与 isStandaloneWordLine 口径对齐——避免"1. 一拖五"这类词条被整行丢弃
+        if(nw.length>=2 && nw.length<=15 && !/[:：]/.test(nw) && !/[。！？.：；，、]$/.test(nw)){
+          cur=nw; isNumberedWord=true;
+        }
+      }
       // v2.2.57：空格分隔"词 释义"单行（如"莫此为甚 对比凸显这件事最恶劣、最过分"）。
       // v2.2.56 去掉"为"连接词后这类行不再被拆词（修复了【莫此】），但整行因超长被独立行词条
       // 跳过 → 词条直接消失。这里拆出 2~8 字词名，同行剩余部分作为第一段释义。
       // 排除"强调/指出/表示…"等常见引述动词开头，避免把句子误当词条（如"习近平总书记 强调 要…"）。
-      if(!isStandaloneWordLine(cur)){
+      if(!isNumberedWord && !isStandaloneWordLine(cur)){
         const sm=cur.match(/^([\u4e00-\u9fa5]{2,8})\s+(.+)$/);
         if(sm && isStandaloneWordLine(sm[1]) && sm[2].trim().length>=6 && !/^(强调|指出|表示|认为|提出|要求|提到|呼吁|强调说|指出说)\s/.test(sm[2].trim())){
           inlineRest=sm[2].trim(); cur=sm[1];
@@ -4310,16 +4337,24 @@ function extractYyWords(kbItems){
       if(lines[i].match(pairRe)) continue;                        // 对比组标题（已另行处理）
       let defs=[], exs=[], sawEx=false;
       if(inlineRest) defs.push(inlineRest);
+      // v2.2.83：编号+词名独占一行的词条，其"出处：…"行属于本条内容、不能当"下一个词条"（否则标题被出处抢走）
+      const allowColonContent=isNumberedWord;
       for(let j=i+1;j<lines.length;j++){
         const ln=lines[j];
         if(lines[j].match(pairRe)) break;                         // 对比组标题
-        if(/^[^【】\n：、，。．.；;！!？?\s]{2,12}\s*[：:]/.test(ln)||/^【[^】]+】/.test(ln)) break; // 下一个"词："/【词】条目
+        if(!allowColonContent){
+          if(/^[^【】\n：、，。．.；;！!？?\s]{2,12}\s*[：:]/.test(ln)||/^【[^】]+】/.test(ln)) break; // 下一个"词："/【词】条目
+        }else if(/^【[^】]+】/.test(ln)) break;                    // 编号词条下：【词】仍是边界，但"词："不是
         if(/^[一二三四五六七八九十]+[、．.]/.test(ln)||/^（[一二三四五六七八九十\d]+）/.test(ln)) break; // 模块/小节标题
+        if(/^\d+[.、]\s*\S/.test(ln)) break;                      // v2.2.83：下一个编号词条（"16. 不可避免"）
         if(defs.length){
           // 下一个词条边界：无冒号独立词条 或 空格分隔"词 释义"单行（词名 2~8 字纯汉字）
           const isNext=isStandaloneWordLine(ln)||((sm2=>!!(sm2&&isStandaloneWordLine(sm2[1])))(ln.match(/^([\u4e00-\u9fa5]{2,8})\s+.+$/)));
-          if(isNext) break;
+          // v2.2.83：编号词条的"出处：…"行是内容而非下一个词条，需放行（否则 defs 已有内容时会提前 break）
+          if(isNext && !(allowColonContent && /^出处\s*[：:]/.test(ln))) break;
         }
+        // v2.2.83：编号词条下"出处："行归为释义内容（不抢标题）
+        if(allowColonContent && /^出处\s*[：:]/.test(ln)){ defs.push(ln); continue; }
         if(/^[（(][^）)]{2,20}[）)]/.test(ln)){ exs.push(ln); sawEx=true; continue; } // （来源）例句
         if(ln.length>=6 && !/^——/.test(ln) && !/^用途[：:]/.test(ln)){ defs.push(ln); continue; } // 释义行
         if(ln.length>=6) continue;
@@ -4331,7 +4366,8 @@ function extractYyWords(kbItems){
         seen.add(cur);
         let s='【'+cur+'】';
         s+='\n'+defs.join('\n');
-        if(exs.length) s+='\n例：'+exs.slice(0,2).join('\n例：');
+        // v2.2.83：例句上限 2→3（原文常给 1 条真题 + 2 条官媒，只留 2 条会丢")
+        if(exs.length) s+='\n例：'+exs.slice(0,3).join('\n例：');
         words.push(s);
         i+=(inlineRest?defs.length-1:defs.length)+exs.length; // 跳过已消费的行（inlineRest 首段释义在词名同一行）
       }
@@ -4370,7 +4406,7 @@ async function renderAccu(){
   const seed=getAccuSeed();
   // v2.2.57：缓存带版本号——解析/渲染逻辑升级时手动+1，强制旧版本渲染的缓存 HTML 失效，
   // 防止跨版本复用旧缓存（如 v2.2.55 渲染的【莫此】拆词 HTML 在 v2.2.56 下继续命中）
-  const ACCU_CACHE_VER=8;   // v2.2.79：广东要闻排序逻辑变更，旧渲染缓存失效
+  const ACCU_CACHE_VER=9;   // v2.2.83：新增单卡刷新按钮（言语/申论/常识/政治理论），旧渲染缓存无按钮需失效
   // 知识库签名：条数+最新更新时间，知识库变化时缓存自动失效
   const kbItems=DB.knowledge||[];
   const kbSig=kbItems.length+'_'+(kbItems.length?Math.max(...kbItems.map(k=>k.updatedAt||0)):0);
@@ -4471,8 +4507,11 @@ async function renderAccu(){
           const rich=tzTopics.filter(t=>t.items.length>=5);
           const pool=rich.length?rich:tzTopics.filter(t=>t.items.length>=2);
           const finalPool=pool.length?pool:tzTopics;
-          const t=dailyPick(finalPool,20260810,1)[0];
-          const picked=dailyPick(t.items, hashStr(t.topic)||20260810, 5);
+          // v2.2.83：并入本卡刷新偏移——原有 20260810 只做固定打乱，卡种子让"↻ 刷新"只换本卡内容。
+          // 两个层级都加：① 选哪个话题会变；② 话题内选哪 5 条也会变（否则只有话题换、条目不变）
+          const ckSeed=accuCardSeed(cat.display);
+          const t=dailyPick(finalPool,20260810+ckSeed,1)[0];
+          const picked=dailyPick(t.items, (hashStr(t.topic)||20260810)+ckSeed*997, 5);
           if(picked.length){
             cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>时政积累</span><span class="section-tag">${escapeHtml(t.topic)}</span></div>
             ${picked.map(p=>`<div style="padding:4px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);white-space:pre-wrap;">${escapeHtml(p)}</div>`).join('')}</div>`;
@@ -4489,20 +4528,22 @@ async function renderAccu(){
       // 失效重渲染）直接复用已抽好的一批；次日（日期变）或点"换一批"（accuSeedCount+1）才基于
       // 最新词库重抽。修复用户反馈"每次更新知识库后言语积累整批变掉"。
       // 抽取本身仍为确定性算法（同词库同日期跨设备结果一致），yyPickCache 仅防止词库集合变化扰动当天批次。
-      const yyKey=todayStr()+'@'+(DB.accuSeedCount||0);
+      const yyKey=todayStr()+'@'+(DB.accuSeedCount||0)+'@'+accuCardSeed('言语素材');
       let picked=(DB.yyPickCache&&DB.yyPickCache.key===yyKey)?(DB.yyPickCache.list||[]):null;
       if(picked){
         picked=picked.filter(w=>words.indexOf(w)>=0); // 词条当天被删则剔除，避免展示已删内容
         if(!picked.length) picked=null;               // 批次为空则回退重抽
       }
       if(!picked){
-        picked=pickFresh(words,20260820,12,'accuYySeen');
+        // v2.2.83：salt 并入本卡刷新偏移——否则点了"↻ 刷新"清掉 yyPickCache 后，
+        // 仍用固定 salt 20260820 重抽，结果与刷新前完全一致（表面看按钮"没反应"）
+        picked=pickFresh(words,20260820+accuCardSeed('言语素材'),12,'accuYySeen');
         DB.yyPickCache={key:yyKey,list:picked};
         saveDB();
       }
       if(picked.length){
         cards+=`<div class="card">
-          <div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span class="section-tag">${words.length}条</span></div>
+          <div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span style="display:flex;align-items:center;gap:6px;"><span class="section-tag">${words.length}条</span>${accuCardRefreshBtn(cat.display)}</span></div>
           ${picked.map(w=>{
             if(w.indexOf('\n')>-1){
               // 多行条目：对比组标题高亮、单条标题加粗、释义正常色、例句淡化
@@ -4537,8 +4578,9 @@ async function renderAccu(){
         }
         // v2.2.43：按天顺序轮转（非随机），保证相邻天展示不同子话题。
         // 原随机抽 1 个（from 31 子话题池）有 ~1/31 相邻重复率，用户反馈"一直看到同一模块"。
-        const slOrder=seededShuffle(grandTopics,20260801); // 固定打乱顺序，每日相同
-        const slIdx=((dayIndexOfToday()+(DB.accuSeedCount||0))%slOrder.length+slOrder.length)%slOrder.length;
+        const slOrder=seededShuffle(grandTopics,20260801+accuCardSeed('申论素材')); // 固定打乱顺序，每日相同；卡刷新时偏移
+        // v2.2.83：卡刷新偏移也并入索引位置——只改打乱顺序不改位置时，若池子较小容易抽回同一条
+        const slIdx=((dayIndexOfToday()+(DB.accuSeedCount||0)+accuCardSeed('申论素材')*7)%slOrder.length+slOrder.length)%slOrder.length;
         const picked=[slOrder[slIdx]];
         for(const t of picked){
           let sectionHtml='';
@@ -4546,7 +4588,8 @@ async function renderAccu(){
             if(!arr||!arr.length) continue;
             const filtered=(type==='案例举证'||type==='案例')?arr.filter(x=>isCaseValid(x)).map(x=>cleanCaseTail(x)):arr;
             if(!filtered.length) continue;
-            const p2=dailyPick(filtered, hashStr(type)||20260801, 2);
+            // v2.2.83：并入卡刷新偏移——否则"↻ 刷新"只换大话题，话题内条目仍与上次重叠
+            const p2=dailyPick(filtered, (hashStr(type)||20260801)+accuCardSeed('申论素材')*997, 2);
             // v2.2.39：提出对策为"标题\n对策1\n对策2…"块结构，首行加粗作标题、其余行逐条显示
             // v2.2.49：表格识别——行内含 ≥2 个 \t 且为多行表格块（飞书表格导出用制表符分隔列），按列拆 grid 渲染；非表格行原样显示
             const renderItem=(x)=>type==='提出对策'&&x.indexOf('\n')>-1
@@ -4555,7 +4598,7 @@ async function renderAccu(){
             sectionHtml+=`<details open style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--text);cursor:pointer;padding:4px 0;">${escapeHtml(type)}</summary><div style="padding:4px 0 6px;">${p2.map(renderItem).join('')}</div></details>`;
           }
           const tagText=t.sub||t.grand||'';
-          cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}<span style="font-size:11px;color:var(--text-light);font-weight:normal;margin-left:4px;">${escapeHtml(t.grand||'')}</span></span><span class="section-tag" title="${escapeHtml(t.grand||'')}">${escapeHtml(tagText)}</span></div>${sectionHtml}</div>`;
+          cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}<span style="font-size:11px;color:var(--text-light);font-weight:normal;margin-left:4px;">${escapeHtml(t.grand||'')}</span></span><span style="display:flex;align-items:center;gap:6px;"><span class="section-tag" title="${escapeHtml(t.grand||'')}">${escapeHtml(tagText)}</span>${accuCardRefreshBtn(cat.display)}</span></div>${sectionHtml}</div>`;
         }
       }
       const xtItems=items.filter(k=>/小题/.test(k.cat||''));
@@ -4633,12 +4676,14 @@ async function renderAccu(){
         const pool=rich.length?rich:topics.filter(t=>t.items.length>=2);
         const finalPool=pool.length?pool:topics;
         // v2.2.43：话题按天顺序轮转，保证相邻天展示不同话题（避免常识等模块每天撞同一话题）
-        const tzOrder=seededShuffle(finalPool,20260802);
-        const tzIdx=((dayIndexOfToday()+(DB.accuSeedCount||0))%tzOrder.length+tzOrder.length)%tzOrder.length;
+        // v2.2.83：并入卡级种子——常识卡与政治理论卡共用这段逻辑，卡种子不同则各自独立轮换
+        const tzOrder=seededShuffle(finalPool,20260802+accuCardSeed(cat.display));
+        // v2.2.83：索引位置也并入卡种子——只改打乱顺序不改位置时，池子小容易抽回同一条
+        const tzIdx=((dayIndexOfToday()+(DB.accuSeedCount||0)+accuCardSeed(cat.display)*7)%tzOrder.length+tzOrder.length)%tzOrder.length;
         const t=tzOrder[tzIdx];
-        const picked=dailyPick(t.items, hashStr(t.topic)||20260802, 5);
+        const picked=dailyPick(t.items, (hashStr(t.topic)||20260802)+accuCardSeed(cat.display), 5);
         cards+=`<div class="card">
-          <div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span class="section-tag">${escapeHtml(t.topic)}</span></div>
+          <div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span style="display:flex;align-items:center;gap:6px;"><span class="section-tag">${escapeHtml(t.topic)}</span>${accuCardRefreshBtn(cat.display)}</span></div>
           ${picked.map(p=>`<div style="padding:4px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);white-space:pre-wrap;">${escapeHtml(p)}</div>`).join('')}
         </div>`;
       }
@@ -6137,6 +6182,36 @@ function accuRefresh(){
   saveDB();
   renderAccu();
 }
+/* v2.2.83：单卡刷新——言语素材/申论素材/常识/政治理论 四个卡各自独立刷新。
+   实现：DB.accuCardSeeds={显示名:次数}，作为该卡的额外种子并入抽取 salt，只影响这一个卡，
+   其他卡不受影响（区别于全局 accuRefresh 把所有卡一起换掉）。新一天归零。 */
+const ACCU_CARD_REFRESHABLE=['言语素材','申论素材','常识','政治理论'];
+function accuTodayCardSeeds(){
+  const today=todayStr();
+  if((DB.accuCardSeedDate||'')!==today){ DB.accuCardSeedDate=today; DB.accuCardSeeds={}; }
+  if(!DB.accuCardSeeds) DB.accuCardSeeds={};
+  return DB.accuCardSeeds;
+}
+/* 某卡的刷新偏移（未刷新过=0，并入 salt 后与原结果一致，不影响旧缓存内容） */
+function accuCardSeed(name){
+  return (accuTodayCardSeeds()[name]||0);
+}
+/* 单卡刷新按钮 HTML（非可刷新卡返回空串） */
+function accuCardRefreshBtn(name){
+  if(ACCU_CARD_REFRESHABLE.indexOf(name)<0) return '';
+  return '<button class="btn btn-sm btn-ghost" style="padding:1px 7px;font-size:11px;" onclick="accuCardRefresh(\''+name+'\')">↻ 刷新</button>';
+}
+function accuCardRefresh(name){
+  const s=accuTodayCardSeeds();
+  s[name]=(s[name]||0)+1;
+  // 只让本卡变化：① 言语素材有独立批次缓存 DB.yyPickCache，key 里带上卡种子即可重抽；
+  // ② 申论/常识/政治理论走 dailyPick，卡种子并入 salt；③ 清整页渲染缓存重渲染——
+  //    其他卡 salt 未变、dailyPick 是确定性算法，结果与之前完全一致。
+  DB.accuHtmlCache=null;
+  DB.yyPickCache=null;
+  saveDB();
+  renderAccu();
+}
 /* 内置言语高频词池（30条） */
 const YY_WORDS_POOL=[
   '【南辕北辙】比喻行动和目的相反',
@@ -6522,7 +6597,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.2.82';
+const APP_VERSION='v2.2.83';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
