@@ -4101,10 +4101,11 @@ function viewPaperReport(id){
 const ACCU_CATS = [
   {display:'常识', cats:['常识']},
   {display:'政治理论', cats:['政治理论']},
-  {display:'每日时政', cats:['时政']},
+  {display:'扩展资料', cats:[]},
   {display:'言语素材', cats:['言语理解']},
   {display:'申论素材', cats:['申论小题积累','申论作文素材']},
   {display:'面试', cats:['面试']},
+  {display:'每日时政', cats:['时政']},
 ];
 let kbCat='常识';
 /* 提取言语素材词条（复用推送页解析逻辑） */
@@ -4406,7 +4407,7 @@ async function renderAccu(){
   const seed=getAccuSeed();
   // v2.2.57：缓存带版本号——解析/渲染逻辑升级时手动+1，强制旧版本渲染的缓存 HTML 失效，
   // 防止跨版本复用旧缓存（如 v2.2.55 渲染的【莫此】拆词 HTML 在 v2.2.56 下继续命中）
-  const ACCU_CACHE_VER=9;   // v2.2.83：新增单卡刷新按钮（言语/申论/常识/政治理论），旧渲染缓存无按钮需失效
+  const ACCU_CACHE_VER=10;  // v2.2.84：扩展资料卡新增+每日时政挪位（卡片顺序变化，旧渲染缓存需失效）
   // 知识库签名：条数+最新更新时间，知识库变化时缓存自动失效
   const kbItems=DB.knowledge||[];
   const kbSig=kbItems.length+'_'+(kbItems.length?Math.max(...kbItems.map(k=>k.updatedAt||0)):0);
@@ -4415,9 +4416,9 @@ async function renderAccu(){
     const el=document.getElementById('page-accu');
     if(el){ el.innerHTML=DB.accuHtmlCache.html; return; }
   }
-  const catIcons={'常识':'🌐','政治理论':'🏛️','每日时政':'📰','言语素材':'💬','申论素材':'📝','面试':'🎤'};
+  const catIcons={'常识':'🌐','政治理论':'🏛️','扩展资料':'📚','每日时政':'📰','言语素材':'💬','申论素材':'📝','面试':'🎤'};
   let cards='';
-  // 每日时政：实时抓取新闻（异步），放在政治理论后面
+  // 每日时政：实时抓取新闻（异步），v2.2.84 挪到循环末位——紧贴循环外追加的每日时评（用户要求"每日时政在每日时评上方"）
   let liveNews=null;
   for(const cat of ACCU_CATS){
     const icon=catIcons[cat.display]||'📄';
@@ -4518,6 +4519,15 @@ async function renderAccu(){
           }
         }
       }
+      continue;
+    }
+    if(cat.display==='扩展资料'){
+      // v2.2.84：外链扩展资料卡（用户指定放政治理论下方）——熊猫君法律背背背 + 成语学习手册
+      cards+=`<div class="card">
+        <div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span class="section-tag">外链</span></div>
+        <div class="set-item" onclick="window.open('https://pandalaw1.site.html2server.com/','_blank')"><div style="flex:1;"><div class="s-name">🐼 法律背背背</div><div class="s-desc">公考法律常识背诵 · 宪法/民法典/刑法/行政法/2026新法（150卡+48题）</div></div><div class="s-right">›</div></div>
+        <div class="set-item" onclick="window.open('https://page-d6fixeevp764rlcq.site.html2server.com/','_blank')"><div style="flex:1;"><div class="s-name">📖 成语学习手册</div><div class="s-desc">500个常见成语 · 望文生义/褒贬易混/典故/高频</div></div><div class="s-right">›</div></div>
+      </div>`;
       continue;
     }
     const items=DB.knowledge.filter(k=>cat.cats.includes(k.cat));
@@ -6597,7 +6607,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.2.83';
+const APP_VERSION='v2.2.84';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
