@@ -4407,12 +4407,14 @@ async function renderAccu(){
   const seed=getAccuSeed();
   // v2.2.57：缓存带版本号——解析/渲染逻辑升级时手动+1，强制旧版本渲染的缓存 HTML 失效，
   // 防止跨版本复用旧缓存（如 v2.2.55 渲染的【莫此】拆词 HTML 在 v2.2.56 下继续命中）
-  const ACCU_CACHE_VER=10;  // v2.2.84：扩展资料卡新增+每日时政挪位（卡片顺序变化，旧渲染缓存需失效）
+  const ACCU_CACHE_VER=11;  // v2.2.85：时评空数据不再落缓存（修复"时评卡消失且当天刷不出来"）
   // 知识库签名：条数+最新更新时间，知识库变化时缓存自动失效
   const kbItems=DB.knowledge||[];
   const kbSig=kbItems.length+'_'+(kbItems.length?Math.max(...kbItems.map(k=>k.updatedAt||0)):0);
   // 缓存命中：种子相同+知识库签名相同+版本一致，才用缓存（防止知识库变化后仍显示旧缓存）
-  if(DB.accuHtmlCache && DB.accuHtmlCache.ver===ACCU_CACHE_VER && DB.accuHtmlCache.seed===seed && DB.accuHtmlCache.kbSig===kbSig && DB.accuHtmlCache.html){
+  // v2.2.85：额外要求 newsOk!==false——带"时评数据为空"标记的缓存一律不命中，强制本次重抓重渲染。
+  // 旧版本（ver<=10）的缓存无此字段，一律视为不可信、不命中，避免继续复用它锁死时评卡。
+  if(DB.accuHtmlCache && DB.accuHtmlCache.ver===ACCU_CACHE_VER && DB.accuHtmlCache.seed===seed && DB.accuHtmlCache.kbSig===kbSig && DB.accuHtmlCache.html && DB.accuHtmlCache.newsOk!==false){
     const el=document.getElementById('page-accu');
     if(el){ el.innerHTML=DB.accuHtmlCache.html; return; }
   }
@@ -4700,6 +4702,9 @@ async function renderAccu(){
     }
   }
   // 每日时评卡片（独立渲染，不依赖知识库内容）：三个分区 人民日报·人民时评 / 人民日报·思想纵横 / 南方日报·评论员
+  // v2.2.85：newsOk 标记本次三源是否拿到了数据。全空 → 本次渲染结果不落缓存，
+  // 下次打开积累页会自动重抓（此前会把"无时评卡"的 HTML 缓存并落盘，当天怎么刷新都出不来）。
+  let newsOk=true;
   {
     const plsp=(liveNews&&liveNews.plsp)||[];
     const nfpl=(liveNews&&liveNews.nfpl)||[];
@@ -4722,6 +4727,8 @@ async function renderAccu(){
         secHtml+=`<div style="font-size:12px;font-weight:600;color:var(--primary);padding:6px 0 2px;">南方日报 · 评论员</div>`+nfpl.slice(0,3).map(n=>newsItem({...n,title:n.title.replace(/^南方日报评论员[：:]\s*/,'')})).join('');
       }
       cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">📰</span>每日时评</span><span class="section-tag">${(liveNews&&fmtNewsTime(liveNews.t))||'实时'}</span></div>${secHtml}</div>`;
+    }else{
+      newsOk=false;
     }
   }
   if(!cards) cards='<div class="empty-state"><div class="emoji">🗃️</div><div class="txt">知识库暂无内容，请在设置 → 知识库管理中导入</div></div>';
@@ -4734,7 +4741,14 @@ async function renderAccu(){
     ${cards}`;
   document.getElementById('page-accu').innerHTML=accuHtml;
   // 缓存渲染结果（同一天+同一刷新次数+知识库不变时不重新渲染）
-  DB.accuHtmlCache={ver:ACCU_CACHE_VER, seed:seed, kbSig:kbSig, html:accuHtml};
+  // v2.2.85：newsOk=false（时评三源本次全空）时不落缓存——否则"缺时评卡"的 HTML 被锁死，
+  // 当天内怎么刷新页面都只会复用旧缓存、不再抓新闻，时评卡就一直不出现（用户反馈的现象）。
+  if(newsOk){
+    DB.accuHtmlCache={ver:ACCU_CACHE_VER, seed:seed, kbSig:kbSig, newsOk:true, html:accuHtml};
+  }else{
+    DB.accuHtmlCache=null;
+    try{ localStorage.removeItem(NEWS_CACHE_KEY); }catch(e){} // 清掉空新闻缓存，下次强制重抓
+  }
   saveDB();
 }
 function setKbCat(c){
@@ -6410,7 +6424,9 @@ async function fetchLiveNews(force){
   const now=Date.now();
   try{
     const c=JSON.parse(localStorage.getItem(NEWS_CACHE_KEY)||'null');
-    if(c&&c.t&&now-c.t<30*60*1000&&!force&&(c.gov.length||c.gd.length)){
+    // v2.2.85：缓存复用条件补上"时评三源至少有一个有数据"——只校验 gov/gd 时，
+    // 时评为空的缓存 30 分钟内会一直被复用，用户点刷新也拿不回时评卡。
+    if(c&&c.t&&now-c.t<30*60*1000&&!force&&(c.gov.length||c.gd.length)&&((c.plsp&&c.plsp.length)||(c.nfpl&&c.nfpl.length)||(c.rmsxzh&&c.rmsxzh.length))){
       // 旧版本缓存可能缺 llk/plsp/nfpl/rmsxzh 等字段，兜底为空数组
       ['gov','gd','qs','rm','llk','plsp','nfpl','rmsxzh'].forEach(k=>{ if(!Array.isArray(c[k])) c[k]=[]; });
       return c;
@@ -6456,7 +6472,14 @@ async function fetchLiveNews(force){
       }
     }
   }catch(e){}
-  try{ localStorage.setItem(NEWS_CACHE_KEY,JSON.stringify(result)); }catch(e){}
+  // v2.2.85：时评三源全空时不写新闻缓存——否则这份"无时评"的缓存会在 30 分钟内被复用，
+  // 用户反复刷新也拿不回时评卡（配合上面的缓存复用条件，形成"抓空→不缓存→下次再抓"的自愈）。
+  const hasShiPing=result.plsp.length||result.nfpl.length||result.rmsxzh.length;
+  if(hasShiPing){
+    try{ localStorage.setItem(NEWS_CACHE_KEY,JSON.stringify(result)); }catch(e){}
+  }else{
+    try{ localStorage.removeItem(NEWS_CACHE_KEY); }catch(e){}
+  }
   return result;
 }
 /* 时间显示：MM-DD HH:MM */
@@ -6607,7 +6630,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.2.84';
+const APP_VERSION='v2.2.85';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
