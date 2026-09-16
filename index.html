@@ -2689,6 +2689,13 @@ async function importStudyExcel(input){
       '数量关系刷题记录':{key:'sl',sub:''},
       '常识判断刷题记录':{key:'cs',sub:''},
       '政治理论刷题记录':{key:'zzll',sub:''},
+      // v2.2.86：兼容按「模块名」命名的 sheet（导出端就是这么生成的）——
+      // 此前判断推理导出为「判断推理刷题记录」，不在白名单内，整个模块导不回来。
+      // sub 留空：具体子模块从新增的「子模块」独立列读取。
+      '判断推理刷题记录':{key:'pd',sub:''},
+      '综合应用刷题记录':{key:'zh',sub:''},
+      '申论刷题记录':{key:'sl2',sub:''},
+      '面试刷题记录':{key:'ms',sub:''},
     };
     let totalRec=0, totalKnow=0;
     const added=new Set();
@@ -2714,13 +2721,16 @@ async function importStudyExcel(input){
         return -1;
       };
       const cDate=colOf(['日期']);
-      const cPoint=colOf(['知识点','试卷类型','题本']);
+      // v2.2.86：题本列优先取独立「题本」表头（新导出格式），旧的「知识点/试卷类型」列仍兼容
+      const cBook=colOf(['题本']);
+      const cPoint=cBook>=0?cBook:colOf(['知识点','试卷类型']);
+      const cSub=colOf(['子模块']);
       const cCorrect=colOf(['正确数量']);
       const cTotal=colOf(['题目总数']);
       const cDur=colOf(['用时']);
       const cQuestion=colOf(['问题']);
       const cImprove=colOf(['改进方法']);
-      // 题本名：表头前可能有"题本名"行（第4行A列）
+      // 题本名兜底：表头前可能有"题本名"行（第4行A列）；新格式题本已在独立列，此兜底仍然保留
       let book='';
       for(let i=headIdx-2;i>=0;i--){
         const v=String(rows[i][0]||'').trim();
@@ -2742,7 +2752,7 @@ async function importStudyExcel(input){
         if(added.has(key)) return;
         added.add(key);
         const recId=uid();
-        DB.records.push({id:recId,module:cfg.key,date:cur.date,total,correct,duration,sub:cfg.sub,book:cur.book||book,question,improve});
+        DB.records.push({id:recId,module:cfg.key,date:cur.date,total,correct,duration,sub:cur.sub||cfg.sub,book:cur.book||book,question,improve});
         totalRec++;
         // 同步到易错考点（mistakes，非 knowledge；带 recId 关联，编辑记录时更新而非新建）
         // 易错知识点 = 改进方法（没有改进时退回问题）；备注留空
@@ -2763,7 +2773,17 @@ async function importStudyExcel(input){
         if(dateRaw && /20\d{2}/.test(dateRaw)){
           // 新记录行
           commit();
-          cur={ date: normalizeDate(dateRaw), point: String(cPoint>=0?row[cPoint]||'':'').trim(), correct: row[cCorrect>=0?cCorrect:-1]??'', total: row[cTotal>=0?cTotal:-1]??'', dur: row[cDur>=0?cDur:-1]??'', question: row[cQuestion>=0?cQuestion:-1]??'', improve: row[cImprove>=0?cImprove:-1]??'', book: (cfg.key==='zl'?(cPoint>=0?String(row[cPoint]||'').trim():''):'') };
+          // v2.2.86：子模块优先取独立「子模块」列；旧文件（无该列）时，若「知识点」列的值
+          // 恰好是该模块的合法子模块名（如判断推理的"图形推理"），则归位到 sub——
+          // 旧版导出把子模块名塞在这一列，不回退归位就会丢信息。
+          const modDef=MODULES.find(m=>m.key===cfg.key);
+          const rawPoint=String(cPoint>=0?row[cPoint]||'':'').trim();
+          const pointIsSub=!!(rawPoint && modDef && (modDef.subs||[]).includes(rawPoint));
+          const rowSub=(cSub>=0?String(row[cSub]||'').trim():'')||(pointIsSub?rawPoint:'')||cfg.sub;
+          // 题本优先取独立「题本」列，无则保留原有"资料分析取知识点列"兼容逻辑；
+          // pointIsSub 命中的值不属于题本，排除掉
+          const rowBook=(cBook>=0?String(row[cBook]||'').trim():'')||(cfg.key==='zl'&&cPoint>=0&&!pointIsSub?rawPoint:'');
+          cur={ date: normalizeDate(dateRaw), point: pointIsSub?'':rawPoint, sub: rowSub, correct: row[cCorrect>=0?cCorrect:-1]??'', total: row[cTotal>=0?cTotal:-1]??'', dur: row[cDur>=0?cDur:-1]??'', question: row[cQuestion>=0?cQuestion:-1]??'', improve: row[cImprove>=0?cImprove:-1]??'', book: rowBook };
         }else if(cur){
           // 延续行：合并问题/改进
           if(cQuestion>=0 && String(row[cQuestion]||'').trim()) cur.question += '\n'+String(row[cQuestion]).trim();
@@ -2961,9 +2981,14 @@ async function exportStudyExcel(){
       if(!m) return;
       const isSy=m.group==='sy';
       const name=m.name+'刷题记录';
-      if(!sheets[name]) sheets[name]=[['序号','日期','知识点', isSy?'题本':'正确数量', isSy?'用时(分钟)':'题目总数', isSy?'':'正确率(%)', isSy?'':'用时(分钟)','问题','改进方法']];
-      const isZf=r.module==='zl';
-      sheets[name].push([sheets[name].length, r.date||'', r.sub||(isZf?r.book:r.point||''), isSy?(r.book||''):r.correct, isSy?'':r.total, isSy?'':(r.total?(r.correct/r.total*100).toFixed(1):''), r.duration||'', r.question||'', r.improve||'']);
+      // v2.2.86：第3列由「知识点」改为「题本」（与导入端 colOf(['知识点','试卷类型','题本']) 对齐），
+      // 子模块独立成列放题本前，无子模块留空——修复"有子模块的模块导出后知识点被子模块顶替、题本名丢失"
+      if(!sheets[name]) sheets[name]=isSy
+        ? [['序号','日期','子模块','题本','用时(分钟)','问题','改进方法']]
+        : [['序号','日期','子模块','题本','正确数量','题目总数','正确率(%)','用时(分钟)','问题','改进方法']];
+      sheets[name].push(isSy
+        ? [sheets[name].length, r.date||'', r.sub||'', r.book||'', r.duration||'', r.question||'', r.improve||'']
+        : [sheets[name].length, r.date||'', r.sub||'', r.book||'', r.correct, r.total, (r.total?(r.correct/r.total*100).toFixed(1):''), r.duration||'', r.question||'', r.improve||'']);
     });
     Object.entries(sheets).forEach(([n,a])=>XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(a), n));
     const out=XLSX.write(wb,{bookType:'xlsx',type:'array'});
@@ -6630,7 +6655,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.2.85';
+const APP_VERSION='v2.2.86';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
