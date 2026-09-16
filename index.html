@@ -2889,10 +2889,50 @@ function renderStudyProgressList(){
 
 /* 学习模块历史记录查看弹窗 */
 let _histReturn=null; // v2.2.54 {moduleKey,top} 从历史弹窗进编辑，返回时恢复到原滚动位置
+/* v2.2.87：历史弹窗子模块筛选。按模块记忆筛选值，编辑/删除后重渲染不丢筛选状态 */
+let _histSubFilter={};
+function setHistSubFilter(moduleKey, sub){
+  _histSubFilter[moduleKey]=sub||'';
+  showRecordHistory(moduleKey);
+}
 function showRecordHistory(moduleKey){
   const m=MODULES.find(x=>x.key===moduleKey);
-  const list=(DB.records||[]).filter(r=>r.module===moduleKey).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const isSy=!!(m&&m.group==='sy');
+  const all=(DB.records||[]).filter(r=>r.module===moduleKey).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  // 该模块实际出现过的子模块（排除空值），按 MODULES 定义顺序排
+  const subDefs=(m&&m.subs)||[];
+  const usedSubs=subDefs.filter(s=>all.some(r=>r.sub===s));
+  // 兜底：数据里存在但不在 subs 定义中的子模块值（历史数据/手改）也列出来，避免筛不到
+  all.forEach(r=>{ if(r.sub && !usedSubs.includes(r.sub)) usedSubs.push(r.sub); });
+  const cur=_histSubFilter[moduleKey]||'';
+  // 筛选值失效（该子模块已无记录）时回落到"全部"
+  const active=(cur && usedSubs.includes(cur))?cur:'';
+  const list=active?all.filter(r=>r.sub===active):all;
+  // 汇总（基于当前筛选结果）
+  const sumTotal=list.reduce((s,r)=>s+(r.total||0),0);
+  const sumCorrect=list.reduce((s,r)=>s+(r.correct||0),0);
+  const sumDur=list.reduce((s,r)=>s+(r.duration||0),0);
+  const sumRate=sumTotal?Math.round(sumCorrect/sumTotal*100):0;
+  const sumHtml=list.length
+    ? (isSy
+        ? `<div style="font-size:12px;color:var(--text-soft);background:var(--bg-soft);border-radius:8px;padding:8px 10px;margin-bottom:10px;">
+             <b>${list.length}</b> 次练习${sumDur?` · 用时 <b>${sumDur}</b> min`:''}
+           </div>`
+        : `<div style="font-size:12px;color:var(--text-soft);background:var(--bg-soft);border-radius:8px;padding:8px 10px;margin-bottom:10px;">
+             <b>${list.length}</b> 条 · 共 <b>${sumTotal}</b> 题 · 对 <b>${sumCorrect}</b>${sumTotal?` · 正确率 <b>${sumRate}%</b>`:''}${sumDur?` · 用时 <b>${sumDur}</b> min`:''}
+           </div>`)
+    : '';
+  const filterHtml=usedSubs.length
+    ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
+        <button class="btn btn-sm ${active?'btn-outline':''}" onclick="setHistSubFilter('${moduleKey}','')">全部<span style="opacity:.6;margin-left:4px;">${all.length}</span></button>
+        ${usedSubs.map(s=>{
+          const n=all.filter(r=>r.sub===s).length;
+          return `<button class="btn btn-sm ${active===s?'':'btn-outline'}" onclick="setHistSubFilter('${moduleKey}','${String(s).replace(/'/g,"\\'")}')">${escapeHtml(s)}<span style="opacity:.6;margin-left:4px;">${n}</span></button>`;
+        }).join('')}
+      </div>`:'';
   openModal(`<div class="modal-head"><h3>📜 ${m?m.icon+' '+m.name:'该模块'}历史刷题记录</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
+    ${filterHtml}
+    ${sumHtml}
     <div id="histScroll" style="max-height:60vh;overflow-y:auto;">
       ${list.length?list.map(r=>`<div style="padding:8px;border-bottom:1px solid var(--border);">
         <div style="display:flex;align-items:center;gap:6px;">
@@ -2906,7 +2946,7 @@ function showRecordHistory(moduleKey){
           <button class="btn btn-sm btn-outline" onclick="editFromHist('${moduleKey}','${r.id}')">编辑</button>
           <button class="btn btn-sm" style="background:var(--danger);color:#fff;" onclick="if(confirm('删除此记录？')){DB.records=DB.records.filter(x=>x.id!=='${r.id}');saveDB();var _sc=document.getElementById('histScroll');_histReturn={moduleKey:'${moduleKey}',top:_sc?_sc.scrollTop:0};showRecordHistory('${moduleKey}');}">删除</button>
         </div>
-      </div>`).join(''):'<div class="empty-state">该模块还没有记录</div>'}
+      </div>`).join(''):(all.length?'<div class="empty-state">该子模块还没有记录</div>':'<div class="empty-state">该模块还没有记录</div>')}
     </div>
     <div class="modal-foot">
       <button class="btn btn-outline" style="flex:1" onclick="closeModal()">关闭</button>
@@ -6655,7 +6695,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.2.86';
+const APP_VERSION='v2.2.87';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
