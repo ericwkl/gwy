@@ -358,6 +358,35 @@ const MODULES = [
   {key:'zh',   name:'综合应用', icon:'📋', subs:[], group:'sy'},
   {key:'ms',   name:'面试',     icon:'🎤', subs:[], group:'sy'},
 ];
+/* ---------- 子模块名规范化（v2.2.90）----------
+   历史遗留：判断推理的「逻辑推理」在 v2.2.38 已统一为「逻辑判断」，
+   但别名映射只做在 Excel 导入路径上，存量数据里仍存着旧名「逻辑推理」。
+   后果：① 排序时认不出定义顺序，被当成"定义外"值垫底；
+        ② 编辑弹窗的下拉没有该选项，旧值回显成「不指定」，一保存就被悄悄清空。
+   这里做全站统一：读取/显示/分组/导出时一律按新名处理，不改动原始数据字段。 */
+const SUB_ALIAS={
+  '逻辑推理':'逻辑判断',
+};
+/* 把任意子模块值规范成当前标准名（未知值原样返回，不丢数据） */
+function normSub(sub){
+  const s=(sub==null?'':String(sub)).trim();
+  if(!s) return '';
+  return SUB_ALIAS[s]||s;
+}
+/* 取模块的子模块定义顺序；兼容传入 module key 或模块对象 */
+function subOrderOf(modOrKey){
+  const m=(typeof modOrKey==='string')?MODULES.find(x=>x.key===modOrKey):modOrKey;
+  return (m&&m.subs)||[];
+}
+/* v2.2.90：子模块排序权重 —— 定义内按定义顺序，无子模块最后，定义外值倒数第二 */
+function subRank(modOrKey, sub){
+  const order=subOrderOf(modOrKey);
+  const s=normSub(sub);
+  if(!s) return 10000;              // 无子模块：最后
+  const i=order.indexOf(s);
+  return i>=0?i:9999;               // 定义内：按顺序；定义外：倒数第二（不丢数据）
+}
+
 const KB_CATS = ['言语理解','常识','政治理论','时政','申论小题积累','申论作文素材','面试'];
 const STORAGE_KEY = 'gk_workbench_v1';
 
@@ -724,7 +753,7 @@ function renderTodayErrorEbb(){
   return errs.slice(0,5).map(e=>{
     const st=getErrorEbb(e);
     const mod=MODULES.find(m=>m.key===e.module);
-    const badge=mod?mod.name+(e.sub?'·'+e.sub:''):'未分类';
+    const badge=mod?mod.name+(normSub(e.sub)?'·'+normSub(e.sub):''):'未分类';
     const round=ebbRoundText(st); // v2.2.74：录入当天 stage 0 = 第1轮
     return `<div style="display:flex;align-items:center;gap:6px;padding:8px 0;border-bottom:1px solid var(--border);">
       <span style="flex-shrink:0;font-size:10px;padding:1px 6px;border-radius:6px;background:var(--primary-soft);color:var(--primary);white-space:nowrap;">${badge}</span>
@@ -745,7 +774,7 @@ function renderTodayMistakeEbb(){
     const mod=MODULES.find(x=>x.key===m.module)||MODULES.find(x=>x.name===m.module);
     const round=ebbRoundText(st); // v2.2.74：录入当天 stage 0 = 第1轮
     return `<div style="display:flex;align-items:center;gap:6px;padding:8px 0;border-bottom:1px solid var(--border);">
-      <span style="flex-shrink:0;font-size:10px;padding:1px 6px;border-radius:6px;background:var(--warning-soft);color:var(--warning);white-space:nowrap;">${mod?mod.name:'未分类'}${m.sub?'·'+m.sub:''}</span>
+      <span style="flex-shrink:0;font-size:10px;padding:1px 6px;border-radius:6px;background:var(--warning-soft);color:var(--warning);white-space:nowrap;">${mod?mod.name:'未分类'}${normSub(m.sub)?'·'+normSub(m.sub):''}</span>
       <span style="flex-shrink:0;font-size:10px;color:var(--accent);background:var(--accent-soft);padding:0 6px;border-radius:6px;">${round}</span>
       <span style="flex:1;min-width:0;font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;" onclick="viewMistakeDetail('${m.id}')">${escapeHtml(m.point||'')}</span>
       <button class="btn btn-sm" style="padding:2px 8px;font-size:11px;background:var(--primary);color:#fff;flex-shrink:0;" onclick="ebbMistakeAction('${m.id}','master')">已掌握</button>
@@ -804,17 +833,15 @@ function showAllErrorEbb(){
   const today=todayStr();
   let list=DB.errors.filter(e=>{const st=getErrorEbb(e); return !st.done && st.next<=today;});
   if(ebbErrFilter) list=list.filter(e=>e.module===ebbErrFilter);
-  if(ebbErrSubFilter) list=list.filter(e=>e.sub===ebbErrSubFilter);
+  if(ebbErrSubFilter) list=list.filter(e=>normSub(e.sub)===ebbErrSubFilter); // v2.2.90 归一化后再比
   // 默认按模块→子模块顺序排列（不再按录入顺序）
   const modOrder={}; MODULES.forEach((m,i)=>{ modOrder[m.key]=i; });
   list=[...list].sort((a,b)=>{
     const ma=modOrder[a.module]!==undefined?modOrder[a.module]:99;
     const mb=modOrder[b.module]!==undefined?modOrder[b.module]:99;
     if(ma!==mb) return ma-mb;
-    const subsA=MODULES.find(m=>m.key===a.module)||{subs:[]};
-    const subsB=MODULES.find(m=>m.key===b.module)||{subs:[]};
-    const sa=(subsA.subs.indexOf(a.sub||'')<0?99:subsA.subs.indexOf(a.sub||''));
-    const sb=(subsB.subs.indexOf(b.sub||'')<0?99:subsB.subs.indexOf(b.sub||''));
+    // v2.2.90：子模块名归一化后再比顺序（旧名「逻辑推理」→「逻辑判断」）
+    const sa=subRank(a.module,a.sub), sb=subRank(b.module,b.sub);
     if(sa!==sb) return sa-sb;
     return (b.date||'').localeCompare(a.date||'');
   });
@@ -826,7 +853,7 @@ function showAllErrorEbb(){
       .map(([k,n])=>`<span class="tag ${ebbErrSubFilter===k?'on':''}" data-sub="${k}" onclick="setEbbErrSubFilter('${k}')">${n}</span>`).join('')+`</div>`:'';
   const rows=list.map(e=>{
     const st=getErrorEbb(e); const mod=MODULES.find(m=>m.key===e.module);
-    const badge=mod?mod.name+(e.sub?'·'+e.sub:''):'未分类';
+    const badge=mod?mod.name+(normSub(e.sub)?'·'+normSub(e.sub):''):'未分类';
     return `<div style="display:flex;align-items:center;gap:6px;padding:8px 0;border-bottom:1px solid var(--border);">
       <span style="flex-shrink:0;font-size:10px;padding:1px 6px;border-radius:6px;background:var(--primary-soft);color:var(--primary);white-space:nowrap;">${badge}</span>
       <span style="flex-shrink:0;font-size:10px;color:var(--accent);background:var(--accent-soft);padding:0 6px;border-radius:6px;">${ebbRoundText(st)}</span>
@@ -858,17 +885,15 @@ function showAllMistakeEbb(){
   const today=todayStr();
   let list=(DB.mistakes||[]).filter(m=>{const st=getMistakeEbb(m); return !st.done && st.next<=today;});
   if(ebbMkFilter) list=list.filter(m=>m.module===ebbMkFilter);
-  if(ebbMkSubFilter) list=list.filter(m=>m.sub===ebbMkSubFilter);
+  if(ebbMkSubFilter) list=list.filter(m=>normSub(m.sub)===ebbMkSubFilter); // v2.2.90 归一化后再比
   // 默认按模块→子模块顺序排列（不再按录入顺序）
   const modOrder={}; MODULES.forEach((m,i)=>{ modOrder[m.key]=i; });
   list=[...list].sort((a,b)=>{
     const ma=modOrder[a.module]!==undefined?modOrder[a.module]:99;
     const mb=modOrder[b.module]!==undefined?modOrder[b.module]:99;
     if(ma!==mb) return ma-mb;
-    const subsA=MODULES.find(m=>m.key===a.module)||{subs:[]};
-    const subsB=MODULES.find(m=>m.key===b.module)||{subs:[]};
-    const sa=(subsA.subs.indexOf(a.sub||'')<0?99:subsA.subs.indexOf(a.sub||''));
-    const sb=(subsB.subs.indexOf(b.sub||'')<0?99:subsB.subs.indexOf(b.sub||''));
+    // v2.2.90：子模块名归一化后再比顺序（旧名「逻辑推理」→「逻辑判断」）
+    const sa=subRank(a.module,a.sub), sb=subRank(b.module,b.sub);
     if(sa!==sb) return sa-sb;
     return (b.date||'').localeCompare(a.date||'');
   });
@@ -881,7 +906,7 @@ function showAllMistakeEbb(){
   const rows=list.map(m=>{
     const st=getMistakeEbb(m); const mod=MODULES.find(x=>x.key===m.module);
     return `<div style="display:flex;align-items:center;gap:6px;padding:8px 0;border-bottom:1px solid var(--border);">
-      <span style="flex-shrink:0;font-size:10px;padding:1px 6px;border-radius:6px;background:var(--warning-soft);color:var(--warning);white-space:nowrap;">${mod?mod.name:'未分类'}${m.sub?'·'+m.sub:''}</span>
+      <span style="flex-shrink:0;font-size:10px;padding:1px 6px;border-radius:6px;background:var(--warning-soft);color:var(--warning);white-space:nowrap;">${mod?mod.name:'未分类'}${normSub(m.sub)?'·'+normSub(m.sub):''}</span>
       <span style="flex-shrink:0;font-size:10px;color:var(--accent);background:var(--accent-soft);padding:0 6px;border-radius:6px;">${ebbRoundText(st)}</span>
       <span style="flex:1;min-width:0;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;" onclick="viewMistakeDetail('${m.id}')">${escapeHtml(m.point||'')}</span>
       <button class="btn btn-sm" style="padding:2px 8px;font-size:11px;background:var(--primary);color:#fff;flex-shrink:0;" onclick="ebbMistakeAction('${m.id}','master')">已掌握</button>
@@ -962,7 +987,7 @@ function renderFullMistakeList(){
   let list=[...(DB.mistakes||[])];
   if(!list.length) return '<div class="empty-state"><div class="emoji">📒</div><div class="txt">暂无考点</div></div>';
   if(mkListFilter) list=list.filter(m=>m.module===mkListFilter);
-  if(mkListSubFilter) list=list.filter(m=>m.sub===mkListSubFilter);
+  if(mkListSubFilter) list=list.filter(m=>normSub(m.sub)===mkListSubFilter); // v2.2.90 归一化后再比
   if(!list.length) return '<div class="empty-state"><div class="emoji">📒</div><div class="txt">该分类暂无考点</div></div>';
   // 默认按模块顺序 → 子模块顺序排列（不再按时间平铺），组内时间倒序
   const modOrder={}; MODULES.forEach((m,i)=>{ modOrder[m.key]=i; });
@@ -970,10 +995,8 @@ function renderFullMistakeList(){
     const ma=modOrder[a.module]!==undefined?modOrder[a.module]:99;
     const mb=modOrder[b.module]!==undefined?modOrder[b.module]:99;
     if(ma!==mb) return ma-mb;
-    const subsA=MODULES.find(m=>m.key===a.module)||{subs:[]};
-    const subsB=MODULES.find(m=>m.key===b.module)||{subs:[]};
-    const sa=(subsA.subs.indexOf(a.sub||'')<0?99:subsA.subs.indexOf(a.sub||''));
-    const sb=(subsB.subs.indexOf(b.sub||'')<0?99:subsB.subs.indexOf(b.sub||''));
+    // v2.2.90：子模块名归一化后再比顺序（旧名「逻辑推理」→「逻辑判断」）
+    const sa=subRank(a.module,a.sub), sb=subRank(b.module,b.sub);
     if(sa!==sb) return sa-sb;
     return (b.date||'').localeCompare(a.date||'');
   });
@@ -995,7 +1018,7 @@ function renderFullMistakeList(){
 /* 考点按子模块分组（子模块顺序按 MODULES.subs，无子模块排最后），组内时间倒序 */
 function renderMkSubGrouped(items){
   const bySub={};
-  items.forEach(m=>{ const s=m.sub||''; bySub[s]=(bySub[s]||[]).concat(m); });
+  items.forEach(m=>{ const s=normSub(m.sub); bySub[s]=(bySub[s]||[]).concat(m); });
   const sampleMod=MODULES.find(m=>m.key===items[0].module);
   const subsOrder=(sampleMod&&sampleMod.subs)||[];
   const subKeys=Object.keys(bySub).sort((a,b)=>{
@@ -1022,7 +1045,7 @@ function mkItemHtml(m){
   const mod=MODULES.find(x=>x.key===m.module)||MODULES.find(x=>x.name===m.module);
   const st=getMistakeEbb(m);
   const round=st.done?'✅':ebbRoundText(st);
-  const badge=mod?mod.icon+' '+mod.name+(m.sub?'·'+m.sub:''):'未分类';
+  const badge=mod?mod.icon+' '+mod.name+(normSub(m.sub)?'·'+normSub(m.sub):''):'未分类';
   const firstLine=(m.point||'').split('\n')[0].trim();
   return `<div class="error-item" style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:9px 10px;" onclick="viewMistakeDetail('${m.id}')">
     <span class="r-tag" style="flex-shrink:0;margin:0;font-size:10px;white-space:nowrap;">${badge}</span>
@@ -1070,13 +1093,13 @@ function backFromMistakeDetail(){
 function nextMistakeDetail(currentId){
   const today=todayStr();
   const cur = currentId ? (DB.mistakes||[]).find(x=>x.id===currentId) : null;
-  const curSub = (cur&&cur.sub)||'';
+  const curSub = normSub((cur&&cur.sub)||''); // v2.2.90 归一化
   // 候选列表优先级：显式子分类筛选 > 当前条目子分类 > 全列表
   // 未显式选子分类筛选时，优先在同子分类内循环，避免点"已掌握"后乱跳到其他子分类（如逻辑题跳资料分析）
   const base=()=>{ let l=[...(DB.mistakes||[])]; if(ebbMkFilter) l=l.filter(m=>m.module===ebbMkFilter); return l; };
   const candidates=[];
-  if(ebbMkSubFilter) candidates.push(base().filter(m=>m.sub===ebbMkSubFilter));
-  else if(curSub) candidates.push(base().filter(m=>m.sub===curSub));
+  if(ebbMkSubFilter) candidates.push(base().filter(m=>normSub(m.sub)===ebbMkSubFilter));
+  else if(curSub) candidates.push(base().filter(m=>normSub(m.sub)===curSub));
   if(!ebbMkSubFilter) candidates.push(base()); // 同子分类做完再回退全列表（不提前关闭）
   for(const list of candidates){
     const idx=currentId?list.findIndex(x=>x.id===currentId):-1;
@@ -1437,7 +1460,7 @@ function renderErrorList(limit){
   // 压缩显示：日期+模块+摘要，点击进详情（注：此函数当前无调用点，错题本实际用 errorItemHtml）
   return list.map(e=>{
     const mod = MODULES.find(m=>m.key===e.module);
-    const badge=mod?mod.icon+' '+mod.name+(e.sub?'·'+e.sub:''):'未分类';
+    const badge=mod?mod.icon+' '+mod.name+(normSub(e.sub)?'·'+normSub(e.sub):''):'未分类';
     return `<div class="error-item" style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:9px 10px;" onclick="viewErrorDetail('${e.id}')">
       <span class="r-tag" style="flex-shrink:0;margin:0;font-size:10px;white-space:nowrap;">${badge}</span>
       <span style="flex:1;min-width:0;font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(e.desc||'无题目')}</span>
@@ -1505,7 +1528,7 @@ function setErrSubFilter(k){
 /* 单个错题行（压缩：日期+模块+摘要，点击进详情） */
 function errorItemHtml(e, tagPrefix){
   const mod=MODULES.find(m=>m.key===e.module);
-  const badge=mod?mod.icon+' '+mod.name+(e.sub?'·'+e.sub:''):'未分类';
+  const badge=mod?mod.icon+' '+mod.name+(normSub(e.sub)?'·'+normSub(e.sub):''):'未分类';
   const st=getErrorEbb(e);
   const round=st.done?'✅ 已掌握':ebbRoundText(st);
   return `<div class="error-item" style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:9px 10px;" onclick="viewErrorDetail('${e.id}')">
@@ -1543,7 +1566,7 @@ function renderFullErrorList(){
 /* 按子模块分组排序（同一子模块排在一起；子模块顺序按 MODULES.subs；无子模块排最后） */
 function renderSubGrouped(items){
   const bySub={};
-  items.forEach(e=>{ const s=e.sub||''; bySub[s]=(bySub[s]||[]).concat(e); });
+  items.forEach(e=>{ const s=normSub(e.sub); bySub[s]=(bySub[s]||[]).concat(e); });
   const sampleMod=MODULES.find(m=>m.key===items[0].module);
   const subsOrder=(sampleMod&&sampleMod.subs)||[];
   const subKeys=Object.keys(bySub).sort((a,b)=>{
@@ -1851,7 +1874,7 @@ function renderStudy(){
         : `<div class="m-stats">今日 <b>${todayTotal}</b> 题${todayTotal?` · 对 <b>${todayCorrect}</b> · 正确率 <b>${rate}%</b>`:''}</div>`;
       const subHtml = m.subs&&m.subs.length
         ? '<div class="m-subs">'+m.subs.map(s=>{
-            const sRecs=todayRecords.filter(r=>r.sub===s);
+            const sRecs=todayRecords.filter(r=>normSub(r.sub)===s); // v2.2.90 归一化后再统计
             const sTot=sRecs.reduce((a,r)=>a+r.total,0);
             const sCor=sRecs.reduce((a,r)=>a+r.correct,0);
             const sRate=sTot?Math.round(sCor/sTot*100):0;
@@ -1930,7 +1953,7 @@ function recordModal(moduleKey, id){
     <div style="font-size:12px;color:var(--text-soft);margin-bottom:10px;">板块：${mod.icon} ${mod.name}${isSy?'（申论与面试：记录练习内容与用时）':''}</div>
     ${mod.subs&&mod.subs.length?`<div class="form-group"><label>子模块</label><select id="rc_sub">
       <option value="">不指定</option>
-      ${mod.subs.map(s=>`<option value="${s}" ${rec&&rec.sub===s?'selected':''}>${s}</option>`).join('')}
+      ${mod.subs.map(s=>`<option value="${s}" ${rec&&normSub(rec.sub)===s?'selected':''}>${s}</option>`).join('')}
     </select></div>`:''}
     <div class="form-group"><label>📖 做的什么题本</label><input id="rc_book" value="${rec&&rec.book?escapeHtml(rec.book):''}" placeholder="如：2026省考刷题营 / 2018年浙江选调卷"></div>
     <div class="form-row">
@@ -1961,7 +1984,8 @@ function saveRecord(moduleKey,id){
   const question=(document.getElementById('rc_question').value||'').trim();
   const improve=(document.getElementById('rc_improve').value||'').trim();
   const subEl=document.getElementById('rc_sub');
-  const sub=subEl?subEl.value:'';
+  // v2.2.90：子模块名归一化（旧名「逻辑推理」→「逻辑判断」），避免同义子模块分裂成两个
+  const sub=normSub(subEl?subEl.value:'');
   const dateEl=document.getElementById('rc_date');
   const date=dateEl&&dateEl.value?dateEl.value:todayStr();
   if(!isSy){
@@ -1971,8 +1995,11 @@ function saveRecord(moduleKey,id){
   if(!isSy && !question && !improve && total<=0){ toast('请填写内容'); return; }
   if(id){
     const r=DB.records.find(r=>r.id===id);
+    // v2.2.88：编辑前抓取旧快照（模块/子模块/问题/改进/日期），用于认领"断了 recId 关联"的原考点，
+    // 避免找不到原考点时无脑新建 → 新 id 无轮次状态 → 艾宾浩斯轮次被重置为第1轮。
+    const oldSnap = r ? {module:r.module, sub:r.sub||'', question:r.question||'', improve:r.improve||'', date:r.date||''} : null;
     Object.assign(r,{total,correct,duration,sub,date,book,question,improve,updatedAt:Date.now()});
-    syncRecordToMistakes(moduleKey, r);
+    syncRecordToMistakes(moduleKey, r, oldSnap);
   }else{
     const nr={id:uid(),module:moduleKey,date,total,correct,duration,sub,book,question,improve,updatedAt:Date.now()};
     DB.records.push(nr);
@@ -1984,7 +2011,7 @@ function saveRecord(moduleKey,id){
   toast('已保存');
 }
 /* 把刷题记录的问题+改进方法自动同步到易错考点管理（mistakes 数组，而非 knowledge） */
-function syncRecordToMistakes(moduleKey, rec){
+function syncRecordToMistakes(moduleKey, rec, oldSnap){
   try{
     const mod=MODULES.find(m=>m.key===moduleKey);
     if(!mod) return;
@@ -1994,21 +2021,52 @@ function syncRecordToMistakes(moduleKey, rec){
     // 易错知识点 = 改进方法（没有改进时退回问题）；备注留空
     const point = improve || question;
     const note = '';
-    // 编辑更新：优先找由这条记录产生的考点（recId 关联），更新而不是新建
+    // ① 编辑更新：优先找由这条记录产生的考点（recId 关联），更新而不是新建
     const linked=DB.mistakes.find(m=>m.recId===rec.id);
     if(linked){
       linked.module=mod.key;
-      linked.sub=rec.sub||''; // v2.2.28：编辑刷题记录换子模块时同步更新考点子模块
+      linked.sub=normSub(rec.sub); // v2.2.28：编辑刷题记录换子模块时同步更新考点子模块；v2.2.90 归一化旧名
       linked.point=point;
       linked.note=note;
       linked.date=rec.date||todayStr();
       linked.updatedAt=Date.now();
       return;
     }
-    // 去重：同模块+同内容不重复
+    // ② v2.2.88 认领：recId 关联断了（历史数据没带 recId、或原考点被重建过），
+    //    用「编辑前的模块+子模块+知识点首行」在无关联的考点里认领，认领成功即**保留其原有轮次**。
+    //    必须用编辑前的内容匹配——编辑后内容已变，用新内容永远找不到原考点。
+    const firstLineOf=s=>((s||'').split('\n')[0]||'').trim();
+    const orphan=m=>!m.recId || !(DB.records||[]).some(x=>x.id===m.recId);
+    const cands=[];
+    if(oldSnap){
+      const ofl=firstLineOf(oldSnap.improve||oldSnap.question||'');
+      if(ofl) cands.push({mod:oldSnap.module||moduleKey, sub:normSub(oldSnap.sub), fl:ofl});
+    }
+    cands.push({mod:mod.key, sub:normSub(rec.sub), fl:firstLineOf(point)}); // 内容未变时的兜底
+    for(const c of cands){
+      if(!c.fl) continue;
+      // 先按「模块+子模块+首行」找；找不到再放宽到「模块+首行」（子模块可能被改过）
+      let hit=DB.mistakes.find(m=>m.module===c.mod && normSub(m.sub)===c.sub && orphan(m) && firstLineOf(m.point)===c.fl);
+      if(!hit) hit=DB.mistakes.find(m=>m.module===c.mod && orphan(m) && firstLineOf(m.point)===c.fl);
+      if(hit){
+        hit.module=mod.key;
+        hit.sub=normSub(rec.sub);
+        hit.point=point;
+        hit.note=note;
+        hit.date=rec.date||todayStr();
+        hit.recId=rec.id; // 补回关联，之后编辑直接走 ① 快路径
+        hit.updatedAt=Date.now();
+        return;
+      }
+    }
+    // ③ 去重：同模块+同内容不重复（命中即补 recId，修复"关联建立不起来"的老问题）
     const exist=DB.mistakes.find(m=>m.module===mod.key && m.point===point);
-    if(exist) return;
-    DB.mistakes.push({id:uid(),module:mod.key,sub:rec.sub||'',point,note,date:rec.date||todayStr(),recId:rec.id,updatedAt:Date.now()});
+    if(exist){
+      if(!exist.recId){ exist.recId=rec.id; exist.updatedAt=Date.now(); }
+      return;
+    }
+    // ④ 确实没有原考点，才新建
+    DB.mistakes.push({id:uid(),module:mod.key,sub:normSub(rec.sub),point,note,date:rec.date||todayStr(),recId:rec.id,updatedAt:Date.now()});
   }catch(e){ console.warn('syncRecordToMistakes', e); }
 }
 /* 把错题的知识点自动同步到考点本（mistakes 数组）；带 recId 关联，编辑时更新而非新建 */
@@ -2045,7 +2103,7 @@ function syncErrorToMistakes(err, oldSnap){
         return;
       }
     }
-    DB.mistakes.push({id:uid(),module:modKey,sub:err.sub||'',point,note:'',date:err.date||todayStr(),recId:err.id,updatedAt:Date.now()});
+    DB.mistakes.push({id:uid(),module:modKey,sub:normSub(err.sub),point,note:'',date:err.date||todayStr(),recId:err.id,updatedAt:Date.now()});
   }catch(e){ console.warn('syncErrorToMistakes',e); }
 }
 /* 一次性把历史上未同步到考点本的错题补同步进来（带 recId 关联 + 去重，已存在不重复） */
@@ -2334,7 +2392,7 @@ function errorModal(id){
   if(id) e=DB.errors.find(x=>x.id===id);
   _errorEditId=id||'';
   _errorPhotos = e&&e.photos?[...e.photos]:[];
-  _errorEditSub = e&&e.sub?e.sub:'';
+  _errorEditSub = normSub(e&&e.sub?e.sub:''); // v2.2.90 归一化，否则下拉回显成「不指定」
   const modOptions = MODULES.map(m=>`<option value="${m.key}" ${e&&e.module===m.key?'selected':''}>${m.icon} ${m.name}</option>`).join('');
   openModal(`<div class="modal-head"><h3>${id?'编辑':'新增'}错题</h3><button class="modal-close" onclick="backFromEditError()">✕</button></div>
     <div class="form-row">
@@ -2492,12 +2550,12 @@ function viewErrorDetail(id){
 function nextErrorDetail(currentId){
   const today=todayStr();
   const cur = currentId ? (DB.errors||[]).find(x=>x.id===currentId) : null;
-  const curSub = (cur&&cur.sub)||'';
+  const curSub = normSub((cur&&cur.sub)||''); // v2.2.90 归一化
   // 候选列表优先级：显式子分类筛选 > 当前条目子分类 > 全列表
   const base=()=>{ let l=[...(DB.errors||[])].sort((a,b)=>(b.date||'').localeCompare(a.date||'')); if(ebbErrFilter) l=l.filter(e=>e.module===ebbErrFilter); return l; };
   const candidates=[];
-  if(ebbErrSubFilter) candidates.push(base().filter(e=>e.sub===ebbErrSubFilter));
-  else if(curSub) candidates.push(base().filter(e=>e.sub===curSub));
+  if(ebbErrSubFilter) candidates.push(base().filter(e=>normSub(e.sub)===ebbErrSubFilter));
+  else if(curSub) candidates.push(base().filter(e=>normSub(e.sub)===normSub(curSub)));
   if(!ebbErrSubFilter) candidates.push(base());
   for(const list of candidates){
     const idx=currentId?list.findIndex(x=>x.id===currentId):-1;
@@ -2569,10 +2627,7 @@ async function importErrorExcel(input){
       modMap[m.name]=m.key;
       (m.subs||[]).forEach(s=>{ modMap[s]=m.key; });
     });
-    // 模块列名 → 子模块名 别名映射（v2.2.38：子模块已统一为"逻辑判断"，旧名"逻辑推理"→新名"逻辑判断"）
-    const SUB_ALIAS={
-      '逻辑推理':'逻辑判断',
-    };
+    // v2.2.90：子模块别名映射统一用全局 normSub（原来这里另存一份局部 SUB_ALIAS，易与别处不同步）
     // 尝试提取xlsx中的嵌入图片（按sheet分组）+ WPS cellimages顺序图片
     const sheetImages=await extractXlsxImages(arrayBuffer, wb.SheetNames).catch(()=>{
       const obj={};
@@ -2620,10 +2675,9 @@ async function importErrorExcel(input){
           }
         }
         if(!moduleKey) moduleKey='pd'; // 默认判断推理
-        // 别名映射（v2.2.38：旧"逻辑推理"→新"逻辑判断"）
-        if(moduleKey==='pd' && !sub && modName && SUB_ALIAS[modName]){
-          sub = SUB_ALIAS[modName];
-        }
+        // 别名映射（v2.2.90：统一走 normSub）
+        if(!sub && modName) sub = normSub(modName)==modName ? '' : normSub(modName);
+        else sub = normSub(sub);
         // 组装内容
         let fullDesc=desc;
         if(questionNo) fullDesc='【'+questionNo+(pageRef?' '+pageRef:'')+'】'+desc;
@@ -2823,7 +2877,7 @@ function studyProgressModal(id){
       <button class="btn" style="flex:1" onclick="saveStudyProgress('${id||''}')">保存</button>
     </div>`);
   setTimeout(updateSPSub, 30);
-  if(p){ setTimeout(()=>{ const s=document.getElementById('sp_sub'); if(s) s.value=p.sub||''; }, 80); }
+  if(p){ setTimeout(()=>{ const s=document.getElementById('sp_sub'); if(s) s.value=normSub(p.sub); }, 80); }
 }
 function updateSPSub(){
   const mk=document.getElementById('sp_module').value;
@@ -2857,12 +2911,20 @@ function renderStudyProgressList(){
     const k=m?m.key:(p.module||'other');
     (byMod[k]=byMod[k]||[]).push(p);
   });
-  // 每个模块组内按日期倒序（新录入在上）
-  Object.values(byMod).forEach(arr=>arr.sort((a,b)=>(b.date||'').localeCompare(a.date||'')));
+  // v2.2.88：模块组内先按「子模块定义顺序」分组，同子模块内按日期倒序，无子模块的统一放最后。
+  // 原来只按日期倒序，会把同一子模块的记录被日期拆散（如图形推理 09-07 和 08-06 中间夹着别的子模块）。
+  // v2.2.90：子模块名先归一化（旧名「逻辑推理」→「逻辑判断」），否则历史记录认不出定义顺序、被垫底
+  Object.keys(byMod).forEach(k=>{
+    byMod[k].sort((a,b)=>{
+      const ra=subRank(k,a.sub), rb=subRank(k,b.sub);
+      if(ra!==rb) return ra-rb;
+      return (b.date||'').localeCompare(a.date||''); // 同子模块内：日期倒序
+    });
+  });
   // v2.2.55：按模块大类整合——子模块不再单独成组，改为行内标签；模块顺序固定（数量→资料→判断→言语→政治→常识→申论→综合→面试），不随录入时间变化
   const item=p=>`<div style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--bg-soft);border-radius:8px;margin-bottom:4px;font-size:12px;">
       <span style="flex:1;min-width:0;">
-        ${p.sub?`<span style="font-size:10px;padding:1px 6px;border-radius:8px;background:var(--primary-soft);color:var(--primary);margin-right:6px;">${escapeHtml(p.sub)}</span>`:''}
+        ${normSub(p.sub)?`<span style="font-size:10px;padding:1px 6px;border-radius:8px;background:var(--primary-soft);color:var(--primary);margin-right:6px;">${escapeHtml(normSub(p.sub))}</span>`:''}
         <span style="color:var(--text);">${escapeHtml(p.book||'(无题本)')}</span>
         <span style="color:var(--accent);margin-left:6px;">${escapeHtml(p.status||'')}</span>
         ${p.note?`<div style="font-size:11px;color:var(--text-soft);margin-top:2px;">${escapeHtml(p.note)}</div>`:''}
@@ -2874,9 +2936,25 @@ function renderStudyProgressList(){
   const modBlock=m=>{
     const arr=byMod[m.key]||[];
     if(!arr.length) return '';
+    // v2.2.88：有多个子模块时，给每个子模块加小标题分组，让"按子模块排序"看得见
+    // v2.2.90：分组键用归一化后的子模块名，旧名「逻辑推理」与「逻辑判断」合并成一组
+    const subOrder=(m.subs)||[];
+    const distinctSubs=[...new Set(arr.map(p=>normSub(p.sub)))];
+    const showGroups=distinctSubs.length>1 && subOrder.length>0;
+    let body;
+    if(showGroups){
+      const groups=new Map();
+      arr.forEach(p=>{ const s=normSub(p.sub); if(!groups.has(s)) groups.set(s,[]); groups.get(s).push(p); });
+      const labelOf=s=>s?escapeHtml(s):'未分类';
+      body=[...groups.entries()].map(([s,items])=>`
+        <div style="font-size:11px;color:var(--text-soft);margin:2px 0 3px 2px;font-weight:600;">${labelOf(s)}<span style="font-weight:400;color:var(--text-light);margin-left:4px;">${items.length}</span></div>
+        ${items.map(item).join('')}`).join('');
+    }else{
+      body=arr.map(item).join('');
+    }
     return `<div style="margin-bottom:8px;">
       <div style="font-size:12px;font-weight:600;color:var(--text-soft);margin-bottom:4px;">${m.icon} ${m.name}<span style="font-weight:400;color:var(--text-light);margin-left:4px;">${arr.length}</span></div>
-      ${arr.map(item).join('')}
+      ${body}
     </div>`;
   };
   // 按试卷排布顺序（国考行政执法卷）：政治理论→常识→言语→数量→判断→资料；申论/综合/面试在后
@@ -2900,14 +2978,15 @@ function showRecordHistory(moduleKey){
   const isSy=!!(m&&m.group==='sy');
   const all=(DB.records||[]).filter(r=>r.module===moduleKey).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   // 该模块实际出现过的子模块（排除空值），按 MODULES 定义顺序排
+  // v2.2.90：先归一化（旧名「逻辑推理」→「逻辑判断」），避免同义子模块在筛选栏里分成两个按钮
   const subDefs=(m&&m.subs)||[];
-  const usedSubs=subDefs.filter(s=>all.some(r=>r.sub===s));
+  const usedSubs=subDefs.filter(s=>all.some(r=>normSub(r.sub)===s));
   // 兜底：数据里存在但不在 subs 定义中的子模块值（历史数据/手改）也列出来，避免筛不到
-  all.forEach(r=>{ if(r.sub && !usedSubs.includes(r.sub)) usedSubs.push(r.sub); });
-  const cur=_histSubFilter[moduleKey]||'';
+  all.forEach(r=>{ const ns=normSub(r.sub); if(ns && !usedSubs.includes(ns)) usedSubs.push(ns); });
+  const cur=normSub(_histSubFilter[moduleKey]||'');
   // 筛选值失效（该子模块已无记录）时回落到"全部"
   const active=(cur && usedSubs.includes(cur))?cur:'';
-  const list=active?all.filter(r=>r.sub===active):all;
+  const list=active?all.filter(r=>normSub(r.sub)===active):all;
   // 汇总（基于当前筛选结果）
   const sumTotal=list.reduce((s,r)=>s+(r.total||0),0);
   const sumCorrect=list.reduce((s,r)=>s+(r.correct||0),0);
@@ -2926,7 +3005,7 @@ function showRecordHistory(moduleKey){
     ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
         <button class="btn btn-sm ${active?'btn-outline':''}" onclick="setHistSubFilter('${moduleKey}','')">全部<span style="opacity:.6;margin-left:4px;">${all.length}</span></button>
         ${usedSubs.map(s=>{
-          const n=all.filter(r=>r.sub===s).length;
+          const n=all.filter(r=>normSub(r.sub)===s).length;
           return `<button class="btn btn-sm ${active===s?'':'btn-outline'}" onclick="setHistSubFilter('${moduleKey}','${String(s).replace(/'/g,"\\'")}')">${escapeHtml(s)}<span style="opacity:.6;margin-left:4px;">${n}</span></button>`;
         }).join('')}
       </div>`:'';
@@ -2937,7 +3016,7 @@ function showRecordHistory(moduleKey){
       ${list.length?list.map(r=>`<div style="padding:8px;border-bottom:1px solid var(--border);">
         <div style="display:flex;align-items:center;gap:6px;">
           <span style="font-weight:600;font-size:13px;">${r.date||'无日期'}</span>
-          <span style="color:var(--text-soft);font-size:12px;">${r.sub?'· '+r.sub:''} ${r.book?'· '+escapeHtml(r.book):''}</span>
+          <span style="color:var(--text-soft);font-size:12px;">${r.sub?'· '+escapeHtml(normSub(r.sub)):''} ${r.book?'· '+escapeHtml(r.book):''}</span>
           <span style="flex:1;text-align:right;color:var(--text-soft);font-size:11px;">${r.total}题/对${r.correct}${r.duration?'·'+r.duration+'min':''}</span>
         </div>
         ${r.question?`<div style="font-size:11px;color:var(--text);margin-top:4px;white-space:pre-wrap;background:var(--bg-soft);padding:6px;border-radius:6px;">${escapeHtml(r.question)}</div>`:''}
@@ -3012,7 +3091,7 @@ async function exportStudyExcel(){
     const progAoa=[['模块','子模块','题本','进度','日期','备注']];
     (DB.studyProgress||[]).forEach(p=>{
       const m=MODULES.find(x=>x.key===p.module);
-      progAoa.push([m?m.name:p.module, p.sub||'', p.book||'', p.status||'', p.date||'', p.note||'']);
+      progAoa.push([m?m.name:p.module, normSub(p.sub), p.book||'', p.status||'', p.date||'', p.note||'']);
     });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(progAoa), '刷题进度');
     const sheets={};
@@ -3027,8 +3106,8 @@ async function exportStudyExcel(){
         ? [['序号','日期','子模块','题本','用时(分钟)','问题','改进方法']]
         : [['序号','日期','子模块','题本','正确数量','题目总数','正确率(%)','用时(分钟)','问题','改进方法']];
       sheets[name].push(isSy
-        ? [sheets[name].length, r.date||'', r.sub||'', r.book||'', r.duration||'', r.question||'', r.improve||'']
-        : [sheets[name].length, r.date||'', r.sub||'', r.book||'', r.correct, r.total, (r.total?(r.correct/r.total*100).toFixed(1):''), r.duration||'', r.question||'', r.improve||'']);
+        ? [sheets[name].length, r.date||'', normSub(r.sub), r.book||'', r.duration||'', r.question||'', r.improve||'']
+        : [sheets[name].length, r.date||'', normSub(r.sub), r.book||'', r.correct, r.total, (r.total?(r.correct/r.total*100).toFixed(1):''), r.duration||'', r.question||'', r.improve||'']);
     });
     Object.entries(sheets).forEach(([n,a])=>XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(a), n));
     const out=XLSX.write(wb,{bookType:'xlsx',type:'array'});
@@ -5359,7 +5438,7 @@ function mistakeModal(id){
   let m=null;
   if(id) m=DB.mistakes.find(x=>x.id===id);
   _mistakeEditId=id||'';
-  _mistakeEditSub = m&&m.sub?m.sub:'';
+  _mistakeEditSub = normSub(m&&m.sub?m.sub:''); // v2.2.90 归一化，否则下拉回显成「不指定」
   _mistakePhotos = m&&m.photos?[...m.photos]:[];
   const mkMod = m ? (MODULES.find(x=>x.key===m.module)||MODULES.find(x=>x.name===m.module)||null) : null;
   const modOptions=MODULES.map(x=>`<option value="${x.key}" ${mkMod&&mkMod.key===x.key?'selected':''}>${x.icon} ${x.name}</option>`).join('');
@@ -5493,7 +5572,7 @@ function importMistakesFromErrors(){
       }
       // 复习提醒拼进易错知识点（与错题原文格式一致：知识点\n复习提醒：xxx）
       const fullPoint=[point,reviewPart].filter(Boolean).join('\n');
-      DB.mistakes.push({id:uid(),module:e.module,sub:e.sub||'',point:fullPoint,date:e.date||todayStr(),note:'来自错题导入',recId:e.id,updatedAt:Date.now()});
+      DB.mistakes.push({id:uid(),module:e.module,sub:normSub(e.sub),point:fullPoint,date:e.date||todayStr(),note:'来自错题导入',recId:e.id,updatedAt:Date.now()});
       added++;
     });
   });
@@ -6695,7 +6774,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.2.87';
+const APP_VERSION='v2.2.90';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
