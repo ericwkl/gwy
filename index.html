@@ -745,6 +745,21 @@ function getMistakeEbb(m){
   if(!DB.mistakeEbb[m.id]) DB.mistakeEbb[m.id]=ebbInit(m.date||todayStr());
   return ebbFixOld(DB.mistakeEbb[m.id]);
 }
+/* v2.2.91：统计一组考点的「已掌握 / 待复习」条数。
+   口径（用户确认）：已掌握 = st.done===true；待复习 = 其余全部未掌握的（含未到期）。
+   注意 done 为真才算已掌握，pending（标记待复习）仍归入待复习。 */
+function countMistakeStat(list){
+  let done=0;
+  (list||[]).forEach(m=>{ if(getMistakeEbb(m).done) done++; });
+  return {total:(list||[]).length, done, todo:(list||[]).length-done};
+}
+/* v2.2.91：考点统计徽章行 HTML（已掌握绿 / 待复习橙） */
+function mkStatBadges(stat, compact){
+  const pad=compact?'0 5px':'1px 8px';
+  const fs=compact?'10px':'11px';
+  return `<span style="font-size:${fs};background:var(--primary-soft);color:var(--primary);border-radius:8px;padding:${pad};white-space:nowrap;">已掌握 ${stat.done}</span>`+
+    `<span style="font-size:${fs};background:var(--accent-soft);color:var(--accent);border-radius:8px;padding:${pad};white-space:nowrap;">待复习 ${stat.todo}</span>`;
+}
 /* 今日待复习错题（艾宾浩斯） */
 function renderTodayErrorEbb(){
   const today=todayStr();
@@ -937,17 +952,43 @@ function mistakeListModal(){
   _detailReturnFnMistake='mistakeListModal';
   const tags=[['','全部']].concat(MODULES.map(m=>[m.key,m.name]))
     .map(([k,n])=>`<span class="tag ${mkListFilter===k?'on':''}" data-k="${k}" onclick="setMkListFilter('${k}')">${k?MODULES.find(m=>m.key===k).icon+' ':''}${n}</span>`).join('');
-  openModal(`<div class="modal-head"><h3>📒 考点本（${(DB.mistakes||[]).length}条）</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
+  const allStat=countMistakeStat(DB.mistakes||[]);
+  openModal(`<div class="modal-head"><h3>📒 考点本（${allStat.total}条）</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div style="font-size:11px;color:var(--text-light);margin-bottom:6px;">点标签筛选模块/子模块 · 默认按模块→子模块排序 · 点考点查看详情</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
+      <span style="font-size:11px;color:var(--text-soft);">全部：</span>${mkStatBadges(allStat)}
+    </div>
+    <div id="mkStatRow"></div>
     <div class="tag-list" id="mkTagList">${tags}</div>${mkSubTagRow()}
     <div id="mkFullList">${renderFullMistakeList()}</div>
     <div class="modal-foot"><button class="btn btn-outline" style="flex:1" onclick="syncAllErrorsToMistakesAndToast()">🔄 补同步未同步错题</button><button class="btn btn-outline" style="flex:1" onclick="closeModal()">关闭</button></div>`);
+  refreshMkStatRow();
   if(_mkListScroll>0){
     setTimeout(()=>{
       const box=document.getElementById('modalBox');
       if(box){ box.scrollTop=_mkListScroll; _mkListScroll=0; }
     },60);
   }
+}
+/* v2.2.91：筛选后的统计汇总条。放在「全部」后方，随模块/子模块筛选实时更新 */
+function curMkFilteredList(){
+  let list=[...(DB.mistakes||[])];
+  if(mkListFilter) list=list.filter(m=>m.module===mkListFilter);
+  if(mkListSubFilter) list=list.filter(m=>normSub(m.sub)===mkListSubFilter);
+  return list;
+}
+function mkStatRowHtml(){
+  if(!mkListFilter) return '';
+  const stat=countMistakeStat(curMkFilteredList());
+  const mod=MODULES.find(m=>m.key===mkListFilter);
+  const label=(mod?mod.name:mkListFilter)+(mkListSubFilter?' · '+mkListSubFilter:'');
+  return `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;background:var(--bg-soft);border-radius:8px;padding:6px 8px;margin-bottom:8px;">
+    <span style="font-size:11px;color:var(--text-soft);">${escapeHtml(label)}：</span>${mkStatBadges(stat)}
+  </div>`;
+}
+function refreshMkStatRow(){
+  const box=document.getElementById('mkStatRow');
+  if(box) box.innerHTML=mkStatRowHtml();
 }
 /* 考点本子模块标签行：选中模块有子模块时显示（如 判断推理 → 图形推理/定义判断…） */
 function mkSubTagRow(){
@@ -963,6 +1004,7 @@ function setMkListFilter(k){
   mkListSubFilter=''; // 切换模块时重置子模块筛选
   const box=document.getElementById('mkFullList');
   if(box) box.innerHTML=renderFullMistakeList();
+  refreshMkStatRow(); // v2.2.91 汇总条随筛选更新
   document.querySelectorAll('#modalBox .tag').forEach(t=>{
     t.classList.toggle('on', t.getAttribute('data-k')===k);
   });
@@ -979,6 +1021,7 @@ function setMkListSubFilter(k){
   mkListSubFilter=k;
   const box=document.getElementById('mkFullList');
   if(box) box.innerHTML=renderFullMistakeList();
+  refreshMkStatRow(); // v2.2.91 汇总条随筛选更新
   document.querySelectorAll('#mkSubTagRow .tag').forEach(t=>{
     t.classList.toggle('on', t.getAttribute('data-sub')===k);
   });
@@ -1009,9 +1052,11 @@ function renderFullMistakeList(){
     const items=byMod[mk];
     const mod=MODULES.find(m=>m.key===mk);
     const name=mod?mod.icon+' '+mod.name:'未分类';
-    return `<div style="display:flex;align-items:center;gap:6px;margin:12px 0 6px;">
+    const mStat=countMistakeStat(items); // v2.2.91 每模块的已掌握/待复习
+    return `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:12px 0 6px;">
       <span style="font-size:13px;font-weight:700;color:var(--primary);">${name}</span>
-      <span style="font-size:11px;background:var(--primary-soft);color:var(--primary);border-radius:8px;padding:1px 8px;">${items.length}条</span>
+      <span style="font-size:11px;background:var(--bg-soft);color:var(--text-soft);border-radius:8px;padding:1px 8px;">共${items.length}</span>
+      ${mkStatBadges(mStat,true)}
     </div>`+renderMkSubGrouped(items);
   }).join('');
 }
@@ -6774,7 +6819,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.2.90';
+const APP_VERSION='v2.2.91';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
