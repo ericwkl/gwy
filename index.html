@@ -417,7 +417,6 @@ function loadDB(){
   // 迁移：新增"时政"分类
   if(DB && DB.kbCats && !DB.kbCats.includes('时政')){
     DB.kbCats.push('时政');
-    saveDB();
   }
   if(!DB){
     DB = {
@@ -4417,7 +4416,9 @@ function extractYyWords(kbItems){
     const re1=/(?:^|\n)【([^】\n]{2,15})】\s*([^\n]{2,150})/g;
     let m;
     while((m=re1.exec(txt))){
-      const word=m[1], body=m[2].trim();
+      // v2.2.93：历史数据里存在"【因噎废食 】"（词名带尾随空格，v2.2.93 前的 re2a 缺陷所致），
+      // 这里 trim 归一，避免同一词条因空格被当成两个不同词
+      const word=m[1].trim(), body=m[2].trim();
       if(/积累$/.test(word)||/^(高频|易混|生词|词语|词汇|近义|反义|辨析|素材|笔记|总结)$/.test(word)) continue;
       if(!seen.has(word)){ seen.add(word); words.push('【'+word+'】'+body.slice(0,120)); }
     }
@@ -4425,9 +4426,13 @@ function extractYyWords(kbItems){
     // v2.2.48: ① 允许编号前缀"42. 裹足不前："（编号+点+词名），词名去掉编号后限 2~8 字；
     //          ② 匹配后往后扫例句/诗行（到下一个词条为止），关联为"例："——修复
     //          "裹足不前"词条只抓释义、紧跟的诗被当成独立词条的问题
-    const re2a=/(?:^|\n)(?:\d+[.、]\s*)?[【]?([^】\n：、，\d]{2,8})[】]?[:：]\s*([^\n]{2,150})/g;
+    // v2.2.93 修复：词名与冒号之间常有空格（如"因噎废食 ：比喻…"），原字符类未排除空格，
+    // 导致捕获到"因噎废食 "（带尾随空格）→ 生成【因噎废食 】。渲染时空格被 HTML 折叠，
+    // 视觉上表现为"【因噎废食】"后面冒号掉到下一行（用户反馈"怎么还多了个冒号"）。
+    // 修法：词名内禁止空格，并在捕获后 trim 兜底。
+    const re2a=/(?:^|\n)(?:\d+[.、]\s*)?[【]?([^】\n：、，\d\s]{2,8})[】]?\s*[:：]\s*([^\n]{2,150})/g;
     while((m=re2a.exec(txt))){
-      const word=m[1], body=m[2].trim();
+      const word=m[1].trim(), body=m[2].trim();
       if(/积累$/.test(word)||/^(高频|易混|生词|词语|词汇|近义|反义|辨析)$/.test(word)||/诗云|诗曰|[^]云$|曰$/.test(word)) continue;
       // v2.2.83：跳过"编号+词名独占一行"词条下方的"出处：…"行——
       // 该行形如"出处：宋·朱熹《观书有感》…"，会被 re2a 当成"词：释义"产生一条【出处】，
@@ -4569,7 +4574,8 @@ function extractYyWords(kbItems){
 function renderSettingsKBList(){
   const accuDisplays=ACCU_CATS.map(a=>a.display);
   const extraCats=(DB.kbCats||[]).filter(c=>!accuDisplays.includes(c)&&!ACCU_CATS.some(a=>a.cats.includes(c)));
-  const allTabs=[...ACCU_CATS, ...extraCats.map(c=>({display:c, cats:[c]}))];
+  // v2.2.92：「扩展资料」在积累页是外链卡（无知识库内容），不作为设置页知识库分类标签展示
+  const allTabs=[...ACCU_CATS, ...extraCats.map(c=>({display:c, cats:[c]}))].filter(t=>t.display!=='扩展资料');
   if(!allTabs.some(t=>t.display===kbCat)) kbCat=allTabs[0].display;
   const curTab=allTabs.find(t=>t.display===kbCat)||allTabs[0];
   const cats=allTabs.map(t=>`<div class="kb-tab ${t.display===kbCat?'active':''}" onclick="setKbCat('${t.display}')">${t.display}</div>`).join('');
@@ -4714,10 +4720,12 @@ async function renderAccu(){
     }
     if(cat.display==='扩展资料'){
       // v2.2.84：外链扩展资料卡（用户指定放政治理论下方）——熊猫君法律背背背 + 成语学习手册
+      // v2.2.92：追加熊猫君常识刷题；顺序调整为 成语学习手册 → 常识刷题 → 法律背背背
       cards+=`<div class="card">
         <div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span class="section-tag">外链</span></div>
-        <div class="set-item" onclick="window.open('https://pandalaw1.site.html2server.com/','_blank')"><div style="flex:1;"><div class="s-name">🐼 法律背背背</div><div class="s-desc">公考法律常识背诵 · 宪法/民法典/刑法/行政法/2026新法（150卡+48题）</div></div><div class="s-right">›</div></div>
         <div class="set-item" onclick="window.open('https://page-d6fixeevp764rlcq.site.html2server.com/','_blank')"><div style="flex:1;"><div class="s-name">📖 成语学习手册</div><div class="s-desc">500个常见成语 · 望文生义/褒贬易混/典故/高频</div></div><div class="s-right">›</div></div>
+        <div class="set-item" onclick="window.open('https://pandadayup.site.html2server.com/','_blank')"><div style="flex:1;"><div class="s-name">🐼 常识刷题</div><div class="s-desc">39个Day巩固练习 · 人文/理科分模块，含错题本与学习统计（205题）</div></div><div class="s-right">›</div></div>
+        <div class="set-item" onclick="window.open('https://pandalaw1.site.html2server.com/','_blank')"><div style="flex:1;"><div class="s-name">🐼 法律背背背</div><div class="s-desc">公考法律常识背诵 · 宪法/民法典/刑法/行政法/2026新法（150卡+48题）</div></div><div class="s-right">›</div></div>
       </div>`;
       continue;
     }
@@ -6033,7 +6041,16 @@ function parseShenlunContent(records){
   let subIdx=0;
   let seenTypes=new Set();
   const SUB_NAMES=['（一）系统思维','（二）问题导向','（三）调查研究','（四）干事创业'];
-
+  // v2.2.93：总句+引文子句合并——zongJuIdx>=0 表示正在收集某条总句的引文子句
+  let zongJuIdx=-1, zongJuType='';
+  let zongJuBlock=false; // v2.2.93：是否处于"XX公式："整块收集模式
+  const ZONGJU_EXCLUDE=[
+    /^(愿景展望|行动号召)[：:]?$/,
+    /^案例[一二三四五六七八九十\d]+[：:]/,
+    /^[→>-]\s*可论证[：:]/,
+    /^用途[：:]/,
+    /^哲学基础/,
+  ];
   const flushGrand=()=>{
     if(splitMode){
       if(Object.values(curSections).some(a=>a&&a.length)){
@@ -6063,6 +6080,7 @@ function parseShenlunContent(records){
       }
     }
     grandTopic=''; subTopic=''; curSections={}; curType='观点'; subTopicsArr=[];
+    zongJuIdx=-1; // v2.2.93：跨大话题结束合并 zongJuBlock=false;
   };
   const startGrand=(line)=>{
     flushGrand();
@@ -6076,6 +6094,7 @@ function parseShenlunContent(records){
       subTopicsArr.push({topic:subTopic, sections:curSections});
     }
     subTopic=line; curSections={}; curType='观点';
+    zongJuIdx=-1; // v2.2.93：跨子话题结束合并 zongJuBlock=false;
   };
   // 兼容旧的 startTopic 入口（2 级数据：把 grandTopic 设为空，subTopic 作为 topic）
   const startTopicLegacy=(line)=>{
@@ -6097,6 +6116,7 @@ function parseShenlunContent(records){
       seenTypes.add(t);
     }
     curType=t; curSections[t]=curSections[t]||[];
+    zongJuIdx=-1; // v2.2.93：进入新的子分类结束上一个总句的合并 zongJuBlock=false;
   };
   records.forEach(k=>{
     const txt=(k.content||'');
@@ -6136,6 +6156,44 @@ function parseShenlunContent(records){
       if(skipHead.some(s=>line===s||line===s+'：'||line.endsWith(s))) continue;
       // 5) "用途："说明行（跳过）
       if(/^用途[：:]/.test(line)) continue;
+      /* v2.2.93：总句 + 引文子句合并（用户反馈："一句总句加其他分句，这种要合并"）
+         背景：飞书导入的纯文本里编号(1. 2.)、项目符号(•)、缩进在服务端提取时就全丢了
+         （实测：全文 1326 行仅 3 行带缩进且与层级无关、制表符 0 个），解析器无法靠缩进识别层级。
+         因此改用"内容形态"判别——这是图上唯一还能分辨的差异：
+           总句 = 一行以「：」结尾且冒号后为空（如"比喻只了解事物的局部而缺乏宏观把握："）；
+           子句 = 紧随其后、被引号包裹的引文行（如"“见骥一毛，不知其状；见画一色，不知其美”"）；
+           终止 = 遇到第一个"非引文行"即停（如"2. 历史承载过去，也启迪未来。"是平级项，必须独立成条）。
+         排除：愿景展望：/行动号召：（子块标题）、案例X：（案例标题）、用途：、→ 可论证：、
+               哲学基础（思想方法）：（目录标题）——它们形态相同但语义上是标题/边界。 */
+      /* v2.2.93：递进钩子块——"递进钩子公式："后面是"公式行 + 如：例子"重复出现的整块，
+         用户明确"钩子你贴出来的都是一整个部分"，故整块并入同一条（与开篇金句的引文子句分开处理）。
+         注意：本判断必须放在"总句判定"之前——块内的"如："也以冒号结尾，若让总句判定先跑，
+         会把 zongJuIdx 指向新建的"如："条目，整块收集就被打断（实测过）。
+         判据：以"XX公式："结尾的行 → 开启块模式，后续行无条件并入，直到下一个子分类/话题标题。 */
+      if(zongJuBlock && zongJuIdx>=0){
+        curSections[zongJuType][zongJuIdx]+='\n'+line;
+        continue;
+      }
+      if(/公式\s*[：:]\s*$/.test(line)){
+        const type=curType;
+        if(!curSections[type]) curSections[type]=[];
+        curSections[type].push(line);
+        zongJuIdx=curSections[type].length-1; zongJuType=type; zongJuBlock=true;
+        continue;
+      }
+      const isZongJuLine=t=>/[：:]\s*$/.test(t) && !ZONGJU_EXCLUDE.some(re=>re.test(t));
+      if(isZongJuLine(line)){
+        const type=curType;
+        if(!curSections[type]) curSections[type]=[];
+        curSections[type].push(line);
+        zongJuIdx=curSections[type].length-1; zongJuType=type;
+        continue;
+      }
+      if(zongJuIdx>=0){
+        // 正在收集子句：仅"引号引文行"并入；出现非引文行 → 本总句结束，按常规流程处理该行
+        if(/^[“”"'「『]/.test(line)){ curSections[zongJuType][zongJuIdx]+='\n'+line; continue; }
+        zongJuIdx=-1;
+      }
       // 6) 普通内容：归到当前子分类（curType = 最近遇到的子分类标题）
       const type=curType;
       if(!curSections[type]) curSections[type]=[];
@@ -6819,7 +6877,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.2.91';
+const APP_VERSION='v2.2.93';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
