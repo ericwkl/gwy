@@ -4863,6 +4863,17 @@ async function renderAccu(){
             curItem=m3[1].trim();
             continue;
           }
+          // v2.2.94：无序号小标题识别。
+          // 背景：飞书导出纯文本时列表序号（1. 2. / a. b.）全部丢失，原文形如
+          //   「马哲题：」下跟若干子项；旧逻辑把这条短标题直接丢弃（length>=6 不成立），
+          // 导致小标题层级全丢、整章被吸进下一条长行（用户报「漏了马哲题这行」）。
+          // 判据（限长度防误判）：≤14字的短行，且（冒号结尾 或 不含任何标点）。
+          if(isMiniTitleLine(line) && !/^\d/.test(line)){
+            if(curItem){ curItems.push(curItem); }
+            curItems.push(line);   // 小标题独立成条，不再丢弃
+            curItem=null;
+            continue;
+          }
           // 子项行：以 - • ◦ 开头，或缩进内容，或短行 → 追加到当前知识点
           const sub=line.replace(/^[-•◦·]\s*/,'').trim();
           if(curItem && sub.length>=2){
@@ -4893,7 +4904,9 @@ async function renderAccu(){
         const picked=dailyPick(t.items, (hashStr(t.topic)||20260802)+accuCardSeed(cat.display), 5);
         cards+=`<div class="card">
           <div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span style="display:flex;align-items:center;gap:6px;"><span class="section-tag">${escapeHtml(t.topic)}</span>${accuCardRefreshBtn(cat.display)}</span></div>
-          ${picked.map(p=>`<div style="padding:4px 0;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);white-space:pre-wrap;">${escapeHtml(p)}</div>`).join('')}
+          ${picked.map(p=>isMiniTitleLine(p)
+            ? `<div style="padding:6px 0 2px;font-size:12px;font-weight:600;color:var(--primary);line-height:1.7;white-space:pre-wrap;">${escapeHtml(p)}</div>`
+            : `<div style="padding:4px 0 4px 8px;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);white-space:pre-wrap;">${escapeHtml(p)}</div>`).join('')}
         </div>`;
       }
     }
@@ -5995,6 +6008,23 @@ async function forceRefreshPush(){
    "案例二：→ 可论证：" → 纯空，返回 false（跳过）
    完整案例正文保留，但结尾空的"→ 可论证："（冒号后无内容）要清理掉，
    有内容的"→ 可论证：xxx"保留。 */
+/* v2.2.94：判断一行是否为「无序号小标题」——常识/政治理论逐行解析与渲染共用。
+   背景：飞书导出纯文本时列表序号（1. 2. / a. b.）全部丢失，原文档里
+   「1. 马哲题：」导出后只剩「马哲题：」，旧逻辑把它当短行丢弃 → 层级全丢。
+   判据（限长度防误判）：≤14字的短行，且（冒号结尾 或 不含任何标点）。
+   例：真 → 「马哲题：」「时政题：」「标准表述」「唯物论」「辩证法」
+       假 → 「绝对的选项不选」（7字无标点，但这句是完整表述…）→ 由调用方配合上下文判定；
+            实际用「不含标点且 ≤14 字」兜住，长句/带标点的正文不会误判。 */
+function isMiniTitleLine(text){
+  if(!text) return false;
+  const s=String(text).trim();
+  if(!s) return false;
+  if(s.length>14) return false;              // 过长 → 是正文
+  if(/[。！？!?；;，,、]/.test(s)) return false; // 含句末/顿挫标点 → 是正文
+  if(/[：:]$/.test(s)) return true;          // 冒号结尾 → 标题（马哲题：/时政题：）
+  if(/^[^\u4e00-\u9fa5]/.test(s)) return false; // 非中文开头（数字/英文/符号）→ 交回原逻辑
+  return true;                                // 纯中文短行且无标点 → 标题（标准表述/唯物论）
+}
 function isCaseValid(text){
   if(!text) return false;
   const s=text.trim();
@@ -6877,7 +6907,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.2.93';
+const APP_VERSION='v2.2.94';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
