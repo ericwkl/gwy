@@ -4868,7 +4868,7 @@ async function renderAccu(){
           //   「马哲题：」下跟若干子项；旧逻辑把这条短标题直接丢弃（length>=6 不成立），
           // 导致小标题层级全丢、整章被吸进下一条长行（用户报「漏了马哲题这行」）。
           // 判据（限长度防误判）：≤14字的短行，且（冒号结尾 或 不含任何标点）。
-          if(isMiniTitleLine(line) && !/^\d/.test(line)){
+          if(isSplitLine(line) && !/^\d/.test(line)){
             if(curItem){ curItems.push(curItem); }
             curItems.push(line);   // 小标题独立成条，不再丢弃
             curItem=null;
@@ -4904,7 +4904,7 @@ async function renderAccu(){
         const picked=dailyPick(t.items, (hashStr(t.topic)||20260802)+accuCardSeed(cat.display), 5);
         cards+=`<div class="card">
           <div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span style="display:flex;align-items:center;gap:6px;"><span class="section-tag">${escapeHtml(t.topic)}</span>${accuCardRefreshBtn(cat.display)}</span></div>
-          ${picked.map(p=>isMiniTitleLine(p)
+          ${picked.map(p=>isBoldTitle(p)
             ? `<div style="padding:6px 0 2px;font-size:12px;font-weight:600;color:var(--primary);line-height:1.7;white-space:pre-wrap;">${escapeHtml(p)}</div>`
             : `<div style="padding:4px 0 4px 8px;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);white-space:pre-wrap;">${escapeHtml(p)}</div>`).join('')}
         </div>`;
@@ -6008,22 +6008,49 @@ async function forceRefreshPush(){
    "案例二：→ 可论证：" → 纯空，返回 false（跳过）
    完整案例正文保留，但结尾空的"→ 可论证："（冒号后无内容）要清理掉，
    有内容的"→ 可论证：xxx"保留。 */
-/* v2.2.94：判断一行是否为「无序号小标题」——常识/政治理论逐行解析与渲染共用。
-   背景：飞书导出纯文本时列表序号（1. 2. / a. b.）全部丢失，原文档里
-   「1. 马哲题：」导出后只剩「马哲题：」，旧逻辑把它当短行丢弃 → 层级全丢。
-   判据（限长度防误判）：≤14字的短行，且（冒号结尾 或 不含任何标点）。
-   例：真 → 「马哲题：」「时政题：」「标准表述」「唯物论」「辩证法」
-       假 → 「绝对的选项不选」（7字无标点，但这句是完整表述…）→ 由调用方配合上下文判定；
-            实际用「不含标点且 ≤14 字」兜住，长句/带标点的正文不会误判。 */
-function isMiniTitleLine(text){
+/* v2.2.95：申论/常识/政治理论/言语理解 逐行解析的「行切分」与「加粗」判定。
+   ⚠️ 关键教训：这两件事必须分开，v2.2.94 把二者混为一谈导致大量误判。
+
+   背景：飞书导出纯文本时列表序号（1. 2. / a. b.）全部丢失，原文「1. 马哲题：」导出后
+   只剩「马哲题：」。旧逻辑把这类短行当正文丢弃 → 层级全丢、内容糊成一坨。
+
+   【isSplitLine】= 解析层「是否独立成条」的判据。保持 v2.2.94 的宽口径
+   （冒号结尾 或 纯中文短行无标点），因为**独立成条本身的收益是真实的**：
+   它能把「描摹 / 提振 / 引擎」这类词条、以及「马哲题：」这类小标题从正文里切出来，
+   防止被 curItem+='\n'+sub 全部吸成一条（实测条目数 166 / 122 / 173）。
+   若把它也收窄，条目数会暴跌（常识 166→30、政治理论 122→27、言语 173→11）——
+   这是 v2.2.95 开发中一度走过的弯路，切勿再收窄。
+
+   【isBoldTitle】= 渲染层「是否加粗高亮」的判据，必须**极窄**，只认无歧义的真标题：
+      以冒号结尾（冒号后无内容）。
+   实测三库「冒号结尾」行：常识 6 / 政治理论 4 / 言语理解 8，逐条核对**全是真标题**
+       （马哲题：/ 时政题：/ 公文：/ 维生素B：/ 省、自治区、直辖市人民政府：/ 一、高频词：）。
+   而 v2.2.94 把「≤14字无标点」也加粗，导致用户看到「标题乱识别」：
+       「医保：主要保障个人的常见病」「七零八落：形容零散稀疏…」（词:释义）
+       「最关键的是大国展现责任担当」「绝对的选项不选」（完整句子）
+       「无先后顺位」「非个人」「区位」（半句续行）
+       「描摹」「提振」（词条本身）
+   → 这些行**仍然独立成条（保住层级），但不再加粗**，视觉上回归干净。
+
+   注：曾尝试给「无标点短行」加「名词性词尾」约束来区分标题与半句，但会误伤
+   「宣告失踪和宣告死亡」「五大淡水湖」「地形地貌」等真标题 —— 规则越复杂误伤越多，故放弃。 */
+function isSplitLine(text){
   if(!text) return false;
-  const s=String(text).trim();
-  if(!s) return false;
-  if(s.length>14) return false;              // 过长 → 是正文
-  if(/[。！？!?；;，,、]/.test(s)) return false; // 含句末/顿挫标点 → 是正文
-  if(/[：:]$/.test(s)) return true;          // 冒号结尾 → 标题（马哲题：/时政题：）
-  if(/^[^\u4e00-\u9fa5]/.test(s)) return false; // 非中文开头（数字/英文/符号）→ 交回原逻辑
-  return true;                                // 纯中文短行且无标点 → 标题（标准表述/唯物论）
+  const t=String(text).trim();
+  if(!t) return false;
+  if(t.length>14) return false;                  // 过长 → 正文
+  if(/[。！？!?；;，,、]/.test(t)) return false;   // 含句末/顿挫标点 → 正文
+  if(/[：:]$/.test(t)) return true;              // 冒号结尾（后无内容）→ 标题
+  if(/^[^\u4e00-\u9fa5]/.test(t)) return false;  // 非中文开头 → 交回原逻辑
+  return true;                                   // 纯中文短行无标点 → 词条/小标题
+}
+/* 渲染层：只有「冒号结尾」才加粗高亮（与 isSplitLine 严格解耦） */
+function isBoldTitle(text){
+  if(!text) return false;
+  const t=String(text).trim();
+  if(!t) return false;
+  if(!/[：:]$/.test(t)) return false;
+  return t.length<=20;
 }
 function isCaseValid(text){
   if(!text) return false;
@@ -6907,7 +6934,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.2.94';
+const APP_VERSION='v2.2.95';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
