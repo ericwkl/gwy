@@ -4602,7 +4602,9 @@ async function renderAccu(){
   const seed=getAccuSeed();
   // v2.2.57：缓存带版本号——解析/渲染逻辑升级时手动+1，强制旧版本渲染的缓存 HTML 失效，
   // 防止跨版本复用旧缓存（如 v2.2.55 渲染的【莫此】拆词 HTML 在 v2.2.56 下继续命中）
-  const ACCU_CACHE_VER=11;  // v2.2.85：时评空数据不再落缓存（修复"时评卡消失且当天刷不出来"）
+  const ACCU_CACHE_VER=12;  // v2.2.97：解析逻辑升级为「缩进感知归属」，旧缓存 HTML 必须失效
+                            // （否则用户端命中 v2.2.96 渲染的缓存，新解析结果永远不显示）；
+                            // v2.2.85：时评空数据不再落缓存（修复"时评卡消失且当天刷不出来"）
   // 知识库签名：条数+最新更新时间，知识库变化时缓存自动失效
   const kbItems=DB.knowledge||[];
   const kbSig=kbItems.length+'_'+(kbItems.length?Math.max(...kbItems.map(k=>k.updatedAt||0)):0);
