@@ -4837,14 +4837,23 @@ async function renderAccu(){
       // 后续非编号行（子项、缩进行）追加到当前知识点
       const topics=[];
       let curTopic=null, curItems=[], curItem=null;
+      let curIndent=-1;   // v2.2.97：当前条目的缩进深度，用于判「子项 / 同级新条目」
       items.forEach(k=>{
-        const lines=(k.content||'').split(/\n/).map(l=>l.replace(/^[▼▷▶\s#*]+/,'').replace(/[*#]+$/,'').trim()).filter(Boolean);
-        for(const line of lines){
+        // v2.2.97：保留行首缩进 —— 飞书 blocks 重建后，缩进深度 = 树深，
+        // 是判断「子项归属」的可靠信号（比文本模式猜测准确）。
+        // 但只在【该行确实带缩进】时启用；缩进为 0 的行（老数据 raw_content / 手输内容）
+        // 一律回退到 v2.2.96 的文本模式（isSplitLine）判定，保证老数据行为逐字节不变。
+        const rawLines=(k.content||'').split(/\n/);
+        for(const raw of rawLines){
+          const stripped=raw.replace(/^[\s▼▷▶#*]+/,'').replace(/[*#]+$/,'').trim();
+          if(!stripped) continue;
+          const indent=raw.length - raw.replace(/^[\s▼▷▶#*]+/,'').length;
+          const line=stripped;
           // 一级标题：一、经济常识
           if(/^[一二三四五六七八九十]+[、，]/.test(line)){
             if(curItem){ curItems.push(curItem); curItem=null; }
             if(curTopic&&curItems.length) topics.push({topic:curTopic, items:curItems});
-            curTopic=line; curItems=[];
+            curTopic=line; curItems=[]; curIndent=-1;
             continue;
           }
           // 二级标题：（一）宪法
@@ -4852,36 +4861,57 @@ async function renderAccu(){
           if(m2){
             if(curItem){ curItems.push(curItem); curItem=null; }
             if(curTopic&&curItems.length) topics.push({topic:curTopic, items:curItems});
-            curTopic=m2[1].trim(); curItems=[];
+            curTopic=m2[1].trim(); curItems=[]; curIndent=-1;
             continue;
           }
-          // 编号内容行：1. xxx 或 1、 xxx → 开始新知识点
+          // v2.2.97：★ 缩进判定优先于编号判定（仅当本行带缩进）★
+          // 缩进比当前条目更深 → 是它的子项，追加（即使自带 1. 2. 编号也算子项）。
+          // 飞书里「1. 马哲题：」的 ordered 子列表同样带 1. 2. 编号，若先走编号分支
+          // 就会被拆成独立条目（用户报「标题后面的内容没有了」）。
+          if(indent>0 && curItem!==null && indent>curIndent && curIndent>=0){
+            const sub=line.replace(/^[-•◦·]\s*/,'').replace(/^\d+[\.、]\s*/,'');
+            if(sub.length>=1) curItem+='\n'+sub;
+            continue;
+          }
+          // 编号内容行：1. xxx / 1、 xxx → 新知识点（无缩进时的 v2.2.96 行为）
           const m3=line.match(/^\d+[\.、]\s*(.+)$/);
           if(m3 && m3[1].length>=3){
-            // 先保存上一个知识点
             if(curItem){ curItems.push(curItem); }
             curItem=m3[1].trim();
+            curIndent=indent;
             continue;
           }
-          // v2.2.94：无序号小标题识别。
-          // 背景：飞书导出纯文本时列表序号（1. 2. / a. b.）全部丢失，原文形如
-          //   「马哲题：」下跟若干子项；旧逻辑把这条短标题直接丢弃（length>=6 不成立），
-          // 导致小标题层级全丢、整章被吸进下一条长行（用户报「漏了马哲题这行」）。
-          // 判据（限长度防误判）：≤14字的短行，且（冒号结尾 或 不含任何标点）。
-          if(isSplitLine(line) && !/^\d/.test(line)){
+          // v2.2.94/96：无序号小标题识别（仅对无缩进行生效 —— 带缩进的是子项，交给上面分支）
+          if(indent===0 && isSplitLine(line) && !/^\d/.test(line)){
             if(curItem){ curItems.push(curItem); }
-            curItems.push(line);   // 小标题独立成条，不再丢弃
+            curItems.push(line);
             curItem=null;
+            curIndent=-1;
             continue;
           }
-          // 子项行：以 - • ◦ 开头，或缩进内容，或短行 → 追加到当前知识点
-          const sub=line.replace(/^[-•◦·]\s*/,'').trim();
-          if(curItem && sub.length>=2){
-            curItem+='\n'+sub;
-          }else if(!curItem && line.length>=6){
-            // 没有编号前缀的独立内容行，直接作为知识点
-            curItem=line;
+          // 缩进 > 0 且无父条目 → 直接开条目（数据异常的兜底）
+          if(indent>0 && (curItem===null || curIndent<0)){
+            const body0=line.replace(/^[-•◦·]\s*/,'').replace(/^\d+[\.、]\s*/,'');
+            if(body0){ curItem=body0; curIndent=indent; }
+            continue;
           }
+          // 无缩进且未命中上述分支 → v2.2.96 的子项追加逻辑
+          if(indent===0){
+            const sub=line.replace(/^[-•◦·]\s*/,'').trim();
+            if(curItem && sub.length>=2){
+              curItem+='\n'+sub;
+            }else if(!curItem && line.length>=6){
+              curItem=line;
+              curIndent=0;
+            }
+            continue;
+          }
+          // 缩进 > 0 且与父条目同深或更浅 → 开新条目
+          const body=line.replace(/^[-•◦·]\s*/,'').replace(/^\d+[\.、]\s*/,'');
+          if(curItem!==null){ curItems.push(curItem); }
+          curItem=body;
+          curIndent=indent;
+          if(!body){ curItem=null; curIndent=-1; }
         }
       });
       // 收尾
@@ -6042,6 +6072,11 @@ function isSplitLine(text){
   if(/[。！？!?；;，,、]/.test(t)) return false;   // 含句末/顿挫标点 → 正文
   if(/[：:]$/.test(t)) return true;              // 冒号结尾（后无内容）→ 标题
   if(/^[^\u4e00-\u9fa5]/.test(t)) return false;  // 非中文开头 → 交回原逻辑
+  // v2.2.96：含「的是」的是完整谓语句（正文），不是小标题。
+  // 例：「最关键的是大国展现责任担当」属「全球治理倡议」的正文行，
+  // 若切成独立条目，抽稀时会与标题拆散（用户报「全球治理倡议给拆散了」）。
+  // 全库实测仅 3 条命中，且全为该类正文句，真标题零误伤。
+  if(/的是/.test(t)) return false;
   return true;                                   // 纯中文短行无标点 → 词条/小标题
 }
 /* 渲染层：只有「冒号结尾」才加粗高亮（与 isSplitLine 严格解耦） */
@@ -6934,7 +6969,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.2.95';
+const APP_VERSION='v2.2.97';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
