@@ -3963,7 +3963,17 @@ function renderPaper(){
     </div>`;
   }).join('');
   const listHtml = list.length?list.map(p=>{
-    const mods = Object.entries(p.modules||{}).map(([k,v])=>{
+    // v2.2.98：模块显示顺序 —— 只把「判断推理」与「数量关系」对调，其余保持数据原有位置。
+    // 历史数据里两者位置不统一（有的判断在前、有的数量在前），统一交换后显示一致。
+    const rawEntries=Object.entries(p.modules||{});
+    const iJ=rawEntries.findIndex(e=>e[0]==='判断推理');
+    const iS=rawEntries.findIndex(e=>e[0]==='数量关系');
+    const modEntries=(iJ>=0&&iS>=0)?(()=>{
+      const a=[...rawEntries];
+      [a[iJ],a[iS]]=[a[iS],a[iJ]];
+      return a;
+    })():rawEntries;
+    const mods = modEntries.map(([k,v])=>{
       if(v&&typeof v==='object'){
         const rate=v.total>0?Math.round(v.correct/v.total*100)+'%':'';
         const dur=v.duration?` ${v.duration}min`:'';
@@ -6971,7 +6981,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.2.97';
+const APP_VERSION='v2.2.98';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
