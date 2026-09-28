@@ -3963,16 +3963,13 @@ function renderPaper(){
     </div>`;
   }).join('');
   const listHtml = list.length?list.map(p=>{
-    // v2.2.98：模块显示顺序 —— 只把「判断推理」与「数量关系」对调，其余保持数据原有位置。
-    // 历史数据里两者位置不统一（有的判断在前、有的数量在前），统一交换后显示一致。
-    const rawEntries=Object.entries(p.modules||{});
-    const iJ=rawEntries.findIndex(e=>e[0]==='判断推理');
-    const iS=rawEntries.findIndex(e=>e[0]==='数量关系');
-    const modEntries=(iJ>=0&&iS>=0)?(()=>{
-      const a=[...rawEntries];
-      [a[iJ],a[iS]]=[a[iS],a[iJ]];
-      return a;
-    })():rawEntries;
+    // v2.2.98：模块显示顺序按 PAPER_MODULES 固定排列
+    // （政治理论 → 常识判断 → 言语理解 → 数量关系 → 判断推理 → 资料分析）。
+    // 历史数据按键序存的不统一，这里统一重排；不在表内的模块排最后（保持相对顺序）。
+    const modEntries=Object.entries(p.modules||{}).sort((a,b)=>{
+      const ia=PAPER_MODULES.indexOf(a[0]), ib=PAPER_MODULES.indexOf(b[0]);
+      return (ia<0?999:ia)-(ib<0?999:ib);
+    });
     const mods = modEntries.map(([k,v])=>{
       if(v&&typeof v==='object'){
         const rate=v.total>0?Math.round(v.correct/v.total*100)+'%':'';
