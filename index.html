@@ -351,8 +351,8 @@ const MODULES = [
   {key:'zzll', name:'政治理论', icon:'🏛️', subs:[], group:'xc'},
   {key:'cs',   name:'常识判断', icon:'🌐', subs:[], group:'xc'},
   {key:'yy',   name:'言语理解', icon:'💬', subs:['逻辑填空','片段阅读','语句表达'], group:'xc'},
-  {key:'pd',   name:'判断推理', icon:'🧩', subs:['图形推理','定义判断','类比推理','逻辑判断','科学推理'], group:'xc'},
   {key:'sl',   name:'数量关系', icon:'🔢', subs:['数字推理','数学运算'], group:'xc'},
+  {key:'pd',   name:'判断推理', icon:'🧩', subs:['图形推理','定义判断','类比推理','逻辑判断','科学推理'], group:'xc'},
   {key:'zl',   name:'资料分析', icon:'📈', subs:[], group:'xc'},
   {key:'sl2',  name:'申论',     icon:'✍️', subs:[], group:'sy'},
   {key:'zh',   name:'综合应用', icon:'📋', subs:[], group:'sy'},
@@ -3963,7 +3963,7 @@ function renderPaper(){
     </div>`;
   }).join('');
   const listHtml = list.length?list.map(p=>{
-    // v2.2.98：模块显示顺序按 PAPER_MODULES 固定排列
+    // v2.2.99：卡片模块显示顺序按 PAPER_MODULES 固定排列
     // （政治理论 → 常识判断 → 言语理解 → 数量关系 → 判断推理 → 资料分析）。
     // 历史数据按键序存的不统一，这里统一重排；不在表内的模块排最后（保持相对顺序）。
     const modEntries=Object.entries(p.modules||{}).sort((a,b)=>{
@@ -4049,7 +4049,7 @@ function renderPaperChart(){
 }
 const PAPER_TYPES=['模考','真题'];
 const PAPER_EXAM_TYPES=['国考','广东省考']; // v2.2.28 模考类型（国考/广东省考），曲线分色显示
-const PAPER_MODULES=['政治理论','常识判断','言语理解','判断推理','数量关系','资料分析'];
+const PAPER_MODULES=['政治理论','常识判断','言语理解','数量关系','判断推理','资料分析']; // v2.2.99：数量关系提到判断推理之前（卡片显示与编辑表单一体统一）
 function paperModal(id){
   paperModalId=id||'';
   paperModalCanceled=false;
@@ -6978,7 +6978,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.2.98';
+const APP_VERSION='v2.3.0';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
