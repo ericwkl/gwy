@@ -4646,7 +4646,20 @@ async function renderAccu(){
           if(/广东|粤|大湾区|粤港澳|珠三角|省委|省政府|省政协|省人大|黄坤明|孟凡利|广州|深圳|珠海|汕头|佛山|韶关|湛江|肇庆|江门|茂名|惠州|梅州|汕尾|河源|阳江|清远|东莞|中山|潮州|揭阳|云浮|APEC|亚太经合组织/.test(t)) return true;
           return !/国务院|中共中央|中央政治局|中央财经|中央书记处|中央军委|全国人大|全国政协|中组部|外交部|发改委|商务部|工信部|教育部|科技部|农业农村部|市场监管总局|二十国集团|G20|联合国|金砖|上合组织|世贸组织|东盟|中央经济工作会议|农村工作会议|中央金融工作会议|全国两会|人民代表大会|习近平|李强|赵乐际|王沪宁|蔡奇|丁薛祥|李希|张国清|刘国中|何立峰|谌贻琴|王小洪|吴政隆|王毅|韩正/.test(t);
         };
-        let gdList=liveNews.gd.filter(n=>isGuangdongNews(n.title)).slice(0,3);
+        // v2.3.1：先按日期倒序再取前 3 条。
+        // 起因：代理/官网返回顺序并非严格日期序（实测 20 条为 28,24,23,23,24,25,25,24,23…），
+        // 直接 slice(0,3) 会取到 28→24→23，把 25 号的两条（位于第 6、7 位）截掉，
+        // 用户看到「25 号的新闻不显示、显示 23 的」。date 字段为完整 YYYY-MM-DD，可信。
+        // 同日多条无时分可区分 → JS sort 稳定排序，保持原有相对顺序。
+        let gdList=liveNews.gd.filter(n=>isGuangdongNews(n.title))
+          .map((n,i)=>({n,i}))
+          .sort((a,b)=>{
+            const da=a.n.date||'', db=b.n.date||'';
+            if(da!==db) return db.localeCompare(da); // 日期新的在前
+            return a.i-b.i;                          // 同日保持原序
+          })
+          .map(x=>x.n)
+          .slice(0,3);
         if(!gdList.length){
           const gdPool=SZ_HOT_POOL.filter(h=>h.isGD);
           gdList=dailyPick(gdPool,20260810,2).map(h=>({title:h.title,url:h.url||''}));
@@ -6978,7 +6991,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.3.0';
+const APP_VERSION='v2.3.1';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
