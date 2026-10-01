@@ -175,9 +175,9 @@ img{max-width:100%;display:block;}
 .task-del{color:var(--text-light);font-size:16px;padding:4px;}
 
 /* ========== 弹窗 ========== */
-.modal-mask{position:fixed;inset:0;background:rgba(40,50,40,.4);z-index:100;display:none;align-items:center;justify-content:center;padding:16px;}
+.modal-mask{position:fixed;inset:0;background:rgba(40,50,40,.4);z-index:100;display:none;align-items:center;justify-content:center;padding:16px;overscroll-behavior:contain;} /* v2.3.2：遮罩层禁止滚动链传导，避免弹窗内滑动触发浏览器下拉刷新 */
 .modal-mask.show{display:flex;animation:fade .2s;}
-.modal{background:#fff;border-radius:var(--radius);width:100%;max-width:420px;max-height:88vh;overflow-y:auto;padding:18px;}
+.modal{background:#fff;border-radius:var(--radius);width:100%;max-width:420px;max-height:88vh;overflow-y:auto;padding:18px;overscroll-behavior:contain;} /* v2.3.2：滚到底不再把滚动链传给页面 */
 .modal-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;}
 .modal-head h3{font-size:16px;font-weight:700;}
 .modal-close{font-size:22px;color:var(--text-light);line-height:1;}
@@ -271,7 +271,7 @@ img{max-width:100%;display:block;}
 
 /* ========== 滚轮选择器 ========== */
 .wheel-picker{display:flex;justify-content:center;gap:4px;margin:10px 0;}
-.wheel-col{width:60px;height:140px;overflow:hidden;position:relative;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);}
+.wheel-col{width:60px;height:140px;overflow:hidden;position:relative;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);touch-action:none;} /* v2.3.2：touch-action:none 阻止浏览器接管滚轮区手势，根治滑动误触下拉刷新 */
 .wheel-col::before,.wheel-col::after{content:'';position:absolute;left:0;right:0;height:50px;z-index:2;pointer-events:none;}
 .wheel-col::before{top:0;background:linear-gradient(to bottom,#fff,transparent);}
 .wheel-col::after{bottom:0;background:linear-gradient(to top,#fff,transparent);}
@@ -3805,16 +3805,25 @@ function setupWheel(colId, listId, arr, initIdx, cb){
     setTimeout(()=>list.style.transition='',150);
     cb(arr[idx]);
   }
-  col.ontouchstart=e=>{ startY=e.touches[0].clientY; lastY=currentY; list.style.transition=''; };
-  col.ontouchmove=e=>{
+  // v2.3.2：滚轮区拦截触摸手势，避免手指滑动时页面跟着滚 / 触发浏览器下拉刷新。
+  // 关键：必须用 addEventListener 显式传 {passive:false}。
+  // 若用 col.ontouchmove=fn 这种属性赋值，Chrome 默认按 passive:true 处理，
+  // 里面调 preventDefault() 会被直接忽略，起不到作用。
+  const stop=e=>{ if(e.cancelable) e.preventDefault(); };
+  col.addEventListener('touchstart',e=>{
+    startY=e.touches[0].clientY; lastY=currentY; list.style.transition=''; stop(e);
+  },{passive:false});
+  col.addEventListener('touchmove',e=>{
     currentY=lastY+(e.touches[0].clientY-startY);
     let idx=Math.round(-currentY/40);
     idx=Math.max(0,Math.min(arr.length-1,idx));
     currentY=Math.max(-(arr.length-1)*40, Math.min(0,currentY));
     list.style.transform=`translateY(${currentY}px)`;
     cb(arr[idx]);
-  };
-  col.ontouchend=apply;
+    stop(e);
+  },{passive:false});
+  col.addEventListener('touchend',apply);
+  col.addEventListener('touchcancel',apply);
   // 鼠标支持（测试用）
   let mDown=false;
   col.onmousedown=e=>{ mDown=true; startY=e.clientY; lastY=currentY; list.style.transition=''; };
@@ -4819,14 +4828,19 @@ async function renderAccu(){
             if(!arr||!arr.length) continue;
             const filtered=(type==='案例举证'||type==='案例')?arr.filter(x=>isCaseValid(x)).map(x=>cleanCaseTail(x)):arr;
             if(!filtered.length) continue;
-            // v2.2.83：并入卡刷新偏移——否则"↻ 刷新"只换大话题，话题内条目仍与上次重叠
-            const p2=dailyPick(filtered, (hashStr(type)||20260801)+accuCardSeed('申论素材')*997, 2);
+            /* v2.3.4：改为**全量显示**该话题下每个分类的全部条目。
+               原逻辑 dailyPick(filtered, salt, 2) 每类只抽 2 条，用户要求
+               「改成每天显示一整个话题的全部内容，比如今天显示乡村振兴，明天显示高质量发展」。
+               轮转单元仍是"子话题"（33 个池：高质量发展/乡村振兴/文旅…），每天换一个；
+               话题内不再抽样，分类全部展开（含条数），但分类默认折叠（<details> 不带 open），
+               避免长话题（最多 55 条，如"高质量发展"）把卡片撑得过长。 */
+            const p2=filtered;
             // v2.2.39：提出对策为"标题\n对策1\n对策2…"块结构，首行加粗作标题、其余行逐条显示
             // v2.2.49：表格识别——行内含 ≥2 个 \t 且为多行表格块（飞书表格导出用制表符分隔列），按列拆 grid 渲染；非表格行原样显示
             const renderItem=(x)=>type==='提出对策'&&x.indexOf('\n')>-1
               ? (()=>{const ls=x.split('\n');const head=escapeHtml(ls[0]);const body=ls.slice(1).map(escapeHtml).join('<br>');return `<div style="font-size:12px;color:var(--text);line-height:1.7;padding:2px 0;white-space:pre-wrap;word-break:break-word;"><span style="font-weight:600;color:var(--primary);">${head}</span>${body?('<br>'+body):''}</div>`;})()
               : (()=>{const tabLines=x.split('\n').filter(l=>l.indexOf('\t')>-1 && l.split('\t').length>=3);if(tabLines.length>=2 && type!=='提出对策'){const rows=tabLines.map(l=>l.split('\t').map(c=>escapeHtml(c.trim())));const cols=Math.max(...rows.map(r=>r.length));return `<div style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:6px;font-size:12px;line-height:1.6;margin:4px 0;padding:8px;border:1px solid var(--border);border-radius:4px;background:rgba(0,0,0,0.02);">${rows.map(r=>r.map((c,i)=>`<div${i===0?' style="font-weight:600;color:var(--primary);"':''}>${c}</div>`).join('')).join('')}</div>`;}return `<div style="font-size:12px;color:var(--text);line-height:1.7;padding:2px 0;white-space:pre-wrap;word-break:break-word;">${escapeHtml(x)}</div>`;})();
-            sectionHtml+=`<details open style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--text);cursor:pointer;padding:4px 0;">${escapeHtml(type)}</summary><div style="padding:4px 0 6px;">${p2.map(renderItem).join('')}</div></details>`;
+            sectionHtml+=`<details style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--text);cursor:pointer;padding:4px 0;">${escapeHtml(type)}<span style="font-weight:normal;color:var(--text-light);margin-left:4px;">（${p2.length}条）</span></summary><div style="padding:4px 0 6px;">${p2.map(renderItem).join('')}</div></details>`;
           }
           const tagText=t.sub||t.grand||'';
           cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}<span style="font-size:11px;color:var(--text-light);font-weight:normal;margin-left:4px;">${escapeHtml(t.grand||'')}</span></span><span style="display:flex;align-items:center;gap:6px;"><span class="section-tag" title="${escapeHtml(t.grand||'')}">${escapeHtml(tagText)}</span>${accuCardRefreshBtn(cat.display)}</span></div>${sectionHtml}</div>`;
@@ -6147,6 +6161,7 @@ function parseShenlunContent(records){
   // 3 级：grandTopic（### 一、经济建设）→ subTopic（（一）高质量发展）→ curSections
   let grandTopic='';
   let subTopic='';
+  let unownedTopic='思想方法'; // v2.3.3：无归属内容的兜底话题名（见 flushGrand）
   let curSections={};
   let curType='观点';
   let subTopicsArr=[]; // 当前 grandTopic 下收集的子话题
@@ -6191,6 +6206,13 @@ function parseShenlunContent(records){
       } else if(subTopic && Object.values(curSections).some(a=>a&&a.length)){
         // 没有 grandTopic 兜底
         results.push({topic:subTopic, sections:curSections});
+      } else if(Object.values(curSections).some(a=>a&&a.length)){
+        /* v2.3.3：无 grandTopic 也无 subTopic，但确有内容 —— 不能丢。
+           场景：「## 哲学基础（思想方法）：」章节的标题（## 哲学基础…/### 马克思辩证唯物主义…）
+           全在 skipHead 里被跳过，导致其下正文（1. 物质决定意识…/2. 马太效应…）没有任何归属，
+           原代码在此静默丢弃整块 curSections（实测丢 21 条：辩证唯物主义 8 条、认识论 5 条、
+           新思想 3 条、名词解释 5 条）。改为挂到独立的「思想方法」话题下保留。 */
+        results.push({topic:unownedTopic, sections:curSections});
       }
     }
     grandTopic=''; subTopic=''; curSections={}; curType='观点'; subTopicsArr=[];
@@ -6261,11 +6283,18 @@ function parseShenlunContent(records){
         else startSub(line);
         continue;
       }
-      // 3.5) 旧版 isTopic 兜底：1. 2. 等编号标题
-      if(line.length<=30 && !/[：:]/.test(line) && /^\d+[\.、]/.test(line)){
-        startSub(line);
-        continue;
-      }
+      /* v2.3.3：删除「编号兜底当话题标题」规则。
+         原规则 `line.length<=30 && !/[：:]/ && /^\d+[\.、]/ → startSub(line)` 把
+         「1. 潮头逐浪勇击桨，无边胜景在前方。」这类**分类下的编号金句**误判成新话题，
+         后果：① 该金句自己变成假话题（卡片标题显示成一句金句）；
+               ② 紧随其后的 `2. …` 因找不到归属分类，落到默认 curType='观点'；
+               ③ 真正的「愿景展望/行动号召/阐述意义…」标题被截断。
+         实测（真实数据 52149 字符）：该规则误判 **127 条**内容行为话题标题，
+         导致 愿景展望 9→47、行动号召 11→18、阐述意义 58→144、开篇金句 9→35 大量内容丢失。
+         为什么可以安全删除：数据里**所有真标题都带 `#` 前缀**（`### 一、经济建设`、
+         `#### （一）高质量发展`），已分别由上面的「2) 大话题」和「3) 子话题」规则处理；
+         这条兜底只作用于去掉 `#` 后的行，属于纯误伤。删除后顶层话题 8→7，
+         与飞书文档实际结构（一、经济建设 ~ 七、通用素材）完全一致。*/
       // 4) 大目录标题（跳过）
       if(skipHead.some(s=>line===s||line===s+'：'||line.endsWith(s))) continue;
       // 5) "用途："说明行（跳过）
@@ -6991,7 +7020,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.3.1';
+const APP_VERSION='v2.3.4';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
