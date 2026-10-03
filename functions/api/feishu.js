@@ -1,0 +1,433 @@
+/* Cloudflare Pages Function —— 同源新闻代理（v2.2.85 扩展）
+   起因（v2.2.81）：原公网代理（agentos 沙箱里的 server.mjs）抓广东要闻长期漏条——
+   官网列表页 20 条只返回 12 条，2026-09-07「省委党校（广东行政学院）2026年秋季学期
+   开学典礼举行」等拿不到。而 gd.gov.cn 不返回 CORS 头，手机 https 网页无法直连，只能走代理。
+   解法：把代理搬进 Cloudflare Pages 自己的 Function，与前端同源（gwy-6n1.pages.dev），
+   天然无 CORS 问题，也不再依赖外部沙箱（那边会休眠/失联）。
+
+   v2.2.85 扩展说明：此前只实现 gd 一个源，其余源请求同源全返回 "unknown src"，前端只能
+   回退公网代理——第一通道对时评类是废的。本次补齐可静态抓取的源：
+     gd / rm / plsp / rmsxzh / nfpl
+   以下源官网是 JS 动态渲染或需登录态（静态 HTML 抓不到），Function 不做，继续由公网代理兜底：
+     gov（www.gov.cn 要闻，TRS 分页脚本渲染）、qs / rmllk（data.people.com.cn 需登录态，直连 500）。
+   前端为双通道（同源优先 → 公网代理兜底），缺哪个源不影响整体。
+
+   通用要点（踩坑总结）：
+   1) 这类 CMS 列表页的可见文字常被「…」截断，**完整标题只在 <a title="…"> 属性里**，
+      必须优先取 title，取不到再退回标签内文本；
+   2) <br/> 先替换成空格再 strip 标签，否则多行标题会粘成一坨；
+   3) 标题不做长度截断、不做关键词过滤——过滤交给前端。
+
+   接口与旧代理保持一致：GET /api/news?src=gd → {ok:true, items:[{t,u,d,s,digest?}]} */
+
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+/* ---------- 通用工具 ---------- */
+
+/** 去掉 HTML 标签与实体，压缩空白 */
+function stripTags(s) {
+  return String(s || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&ldquo;|&rdquo;/g, '"')
+    .replace(/&mdash;/g, '—')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** 相对链接补全为绝对链接 */
+function absUrl(href, base) {
+  let u = String(href || '').trim();
+  if (!u) return '';
+  if (u.startsWith('//')) return 'https:' + u;
+  if (/^https?:/i.test(u)) return u;
+  try { return new URL(u, base).href; } catch (e) { return ''; }
+}
+
+/** 从链接里取日期 YYYY-MM-DD（人民网系：/n1/YYYY/MMDD/cNNN-NNN.html） */
+function dateFromUrl(url) {
+  const s = String(url || '');
+  let m = s.match(/\/n1\/(20\d{2})\/(\d{2})(\d{2})\//);
+  if (m) return m[1] + '-' + m[2] + '-' + m[3];
+  m = s.match(/\/(20\d{2})[-/]?(\d{2})[-/]?(\d{2})?/);
+  if (!m) return '';
+  return m[1] + '-' + m[2] + (m[3] ? '-' + m[3] : '');
+}
+
+/** 从 <a …> 标签串里取标题：优先 title 属性，其次标签内文本 */
+function titleOf(aTagInner, tagHtml) {
+  const tm = tagHtml.match(/\btitle\s*=\s*"([^"]*)"/i) || tagHtml.match(/\btitle\s*=\s*'([^']*)'/i);
+  const fromTitle = tm ? stripTags(tm[1]) : '';
+  if (fromTitle && fromTitle.length >= 6) return fromTitle;
+  return stripTags(aTagInner);
+}
+
+/** 通用列表解析：按链接特征抓 <a>，标题优先取 title 属性 */
+function parseByLink(html, opts) {
+  const { hrefRe, base, minLen = 6, max = 30, accept } = opts;
+  const out = [];
+  const seen = new Set();
+  // 抓 <a …>…</a>，保留开标签（含 title）与内部文本
+  const re = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+  let m;
+  while ((m = re.exec(html))) {
+    const attrs = m[1] || '';
+    const hrefM = attrs.match(/\bhref\s*=\s*"([^"]*)"/i) || attrs.match(/\bhref\s*=\s*'([^']*)'/i);
+    if (!hrefM) continue;
+    const url = absUrl(hrefM[1], base);
+    if (!url || !hrefRe.test(url)) continue;
+    const t = titleOf(m[2], attrs);
+    if (!t || t.length < minLen) continue;
+    if (/^(查看详情|更多|下一页|上一页|返回|首页)$/.test(t)) continue;
+    if (accept && !accept(t, url)) continue;
+    const key = url.split('#')[0];
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ t, u: url, d: dateFromUrl(url) });
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+/* ---------- 各源解析 ---------- */
+
+/* 广东要闻（gd.gov.cn）：列表结构固定，用专用正则 + <br/> 替换 */
+function parseGd(html) {
+  const out = [];
+  const re = /<li>\s*<span class="dot"><\/span>\s*<span class="til"><a href="([^"]+)"[^>]*>([\s\S]*?)<\/a><\/span>\s*<span class="time"[^>]*>([\d-]{8,10})<\/span>/g;
+  let m;
+  while ((m = re.exec(html))) {
+    const url = absUrl(m[1], 'https://www.gd.gov.cn');
+    if (!/content\/(m?post)_\d+\.html/.test(url)) continue;
+    const t = stripTags(m[2]);
+    if (!t) continue;
+    out.push({ t, u: url, d: m[3] || '' });
+  }
+  return out;
+}
+
+/* 人民网观点频道（opinion.people.com.cn）：/n1/YYYY/MMDD/cNNNNN-NNN.html */
+function parseRm(html) {
+  return parseByLink(html, {
+    hrefRe: /\/n1\/20\d{2}\/\d{4}\/c\d+-\d+\.html$/,
+    base: 'http://opinion.people.com.cn/',
+    minLen: 6,
+  });
+}
+
+/* 人民时评（栏目页 GB/8213/49160/49219）：该页 30 条均为 c461529 频道的人民时评，
+   标题有的带「（人民时评）」后缀、有的不带，故不做标题过滤，整页收下。 */
+function parsePlsp(html) {
+  return parseByLink(html, {
+    hrefRe: /\/n1\/20\d{2}\/\d{4}\/c461529-\d+\.html$/,
+    base: 'http://opinion.people.com.cn/',
+    minLen: 6,
+  });
+}
+
+/* 思想纵横（theory.people.com.cn，c40531 频道） */
+function parseSxzh(html) {
+  return parseByLink(html, {
+    hrefRe: /\/n1\/20\d{2}\/\d{4}\/c\d+-\d+\.html$/,
+    base: 'http://theory.people.com.cn/',
+    minLen: 6,
+  });
+}
+
+/* 南方日报评论员（news.southcn.com）：标题带「南方日报评论员」 */
+function parseNfpl(html) {
+  return parseByLink(html, {
+    hrefRe: /node_[a-z0-9]+\/[a-f0-9]+\.shtml$/,
+    base: 'https://news.southcn.com/',
+    minLen: 8,
+    accept: (t) => /南方日报评论员/.test(t),
+  });
+}
+
+/* ---------- 源配置 ---------- */
+
+const SOURCES = {
+  gd: {
+    name: '广东要闻', cat: 'news', src: '广东省人民政府网',
+    url: 'https://www.gd.gov.cn/gdywdt/gdyw/',
+    parse: parseGd,
+  },
+  rm: {
+    name: '人民网观点', cat: 'opinion', src: '人民网',
+    url: 'http://opinion.people.com.cn/GB/223228/index.html',
+    parse: parseRm,
+  },
+  plsp: {
+    name: '人民时评', cat: 'theory', src: '人民时评',
+    url: 'http://opinion.people.com.cn/GB/8213/49160/49219/index.html',
+    parse: parsePlsp,
+  },
+  rmsxzh: {
+    name: '思想纵横', cat: 'theory', src: '思想纵横',
+    url: 'http://theory.people.com.cn/',
+    parse: parseSxzh,
+  },
+  nfpl: {
+    name: '南方日报评论员', cat: 'opinion', src: '南方日报评论员',
+    url: 'https://news.southcn.com/node_ac2b0b62a4/',
+    parse: parseNfpl,
+  },
+};
+
+/* ---------- 飞书文档抓取（v2.3.10 搬迁） ----------
+
+   起因：飞书文档导入此前依赖外部沙箱代理（agentos）与公共 CORS 代理，
+   两者均已不可用（沙箱休眠返 400、allorigins 408、codetabs 522、corsproxy 401），
+   导致「导入飞书链接」长期失败。本次把这条通道也搬进 Cloudflare Function。
+
+   ⚠️ 关键踩坑（务必保留这段注释）：
+   1) 直接 fetch 飞书文档地址会命中反爬。响应是一条**多跳重定向链**：
+        302 → accounts.feishu.cn/accounts/page/login
+        302 → login.feishu.cn/accounts/trap
+        302 → accounts.feishu.cn/accounts/page/login?no_trap=1
+        302 → 原地址?login_redirect_times=1
+        302 → 原地址
+        200 ← 完整页面（约 1MB，附带若干 Set-Cookie）
+      这里**必须让 fetch 自己跟随整条链并带上 Cookie**（默认 redirect:'follow' 即满足），
+      不能手工 302 跳转、也不能 `redirect:'manual'`——否则拿到的只是登录页，
+      甚至把整条链当成无限循环报错（"infinite loop"）而误判成「文档不存在」。
+   2) 正文容器类名是 `render-unit` / `page-block`（**没有** docx-content / wiki-content，
+      前端旧代码找的类名是错的）。抓不到容器时兜底取整页纯文本再截断。
+   3) 匿名可读的文档才能拿到正文；若权限未开匿名，「只读链接」打开后飞书会返回
+      一个 HTTP 200 但正文为空的壳页（可见文字往往只有 "Wiki"/"Docs" 几个字），
+      此时不能报「网络错误」，要明确提示权限问题。
+*/
+
+/** 去掉 <script>/<style> 与标签，实体还原，保留换行结构（飞书正文提取用） */
+function htmlToText(html) {
+  let s = String(html || '');
+  s = s.replace(/<script[\s\S]*?<\/script>/gi, '');
+  s = s.replace(/<style[\s\S]*?<\/style>/gi, '');
+  s = s.replace(/<head[\s\S]*?<\/head>/gi, '');
+  s = s.replace(/<\/(p|div|li|h[1-6]|tr|section|article|blockquote)>/gi, '\n');
+  s = s.replace(/<br\s*\/?>/gi, '\n');
+  s = s.replace(/<[^>]+>/g, '');
+  s = s
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&ldquo;|&rdquo;/g, '"')
+    .replace(/&hellip;/g, '…')
+    .replace(/&mdash;/g, '—')
+    .replace(/&amp;/g, '&');
+  // 零宽字符（飞书正文里大量 \u200b）清掉，否则会污染标题与行首
+  s = s.replace(/[\u200b-\u200f\ufeff]/g, '');
+  s = s.replace(/[ \t]+\n/g, '\n');
+  s = s.replace(/\n[ \t]+/g, '\n');
+  s = s.replace(/[ \t]{2,}/g, ' ');
+  s = s.replace(/\n{3,}/g, '\n\n');
+  return s.trim();
+}
+
+/** 从整页 HTML 里抽取飞书文档标题
+    ⚠️ 飞书的 <title> 只写死成 "Docs"/"Wiki"，**不是文档名**，别拿它当标题。
+    真实标题有两处可靠来源（按优先级）：
+      a) 页面内联的 window.__SSR_DOC_INFO__ JSON（含 title 字段），最准；
+      b) page-block / render-unit 容器开头的第一段可见文字（紧随容器起始标签）。
+*/
+function feishuTitleOf(html) {
+  const s = String(html || '');
+  // a) SSR JSON
+  const ssrM = s.match(/__SSR_DOC_INFO__\s*=\s*JSON\.parse\(decodeURIComponent\(\s*'([^']+)'/);
+  if (ssrM) {
+    try {
+      const info = JSON.parse(decodeURIComponent(ssrM[1]));
+      const cand = [
+        info && info.title,
+        info && info.doc_title,
+        info && info.data && info.data.title,
+        info && info.meta && info.meta.title,
+      ].find((x) => typeof x === 'string' && x.trim());
+      if (cand) return cand.trim();
+    } catch (e) { /* 落到 b) */ }
+  }
+  // b) 容器开头的可见文字。实测飞书正文首行标题放在 `ace-line` 节点里，
+  //    其前面还有编辑器占位符「输入"/"快速插入内容」和作者信息，必须跳过。
+  //    所以直接以 ace-line 为锚点取第一行，最稳。
+  const aceM = s.match(/class="[^"]*\bace-line\b[^"]*"[^>]*>([\s\S]{0,300}?)<\//i);
+  if (aceM) {
+    const t = htmlToText(aceM[1]).split('\n').map((x) => x.trim()).filter(Boolean)[0] || '';
+    if (t && t.length <= 80) return t;
+  }
+  // c) 退一步：容器开头片段里挑第一个像标题的行
+  const cM =
+    s.match(/<div[^>]+class="[^"]*\bpage-block\b[^"]*"[^>]*>([\s\S]{0,1500}?)(?:<\/h1>|<\/div>\s*<div)/i) ||
+    s.match(/<div[^>]+class="[^"]*\brender-unit\b[^"]*"[^>]*>([\s\S]{0,1500}?)(?:<\/h1>|<\/div>\s*<div)/i);
+  if (cM) {
+    const lines = htmlToText(cM[1]).split('\n').map((x) => x.trim()).filter(Boolean);
+    const t = lines.find(
+      (x) =>
+        x.length <= 60 &&
+        !/^输入\s*[“"]?\s*\/\s*[”"]?\s*快速插入内容$/.test(x) &&
+        !/^(用户\d+|匿名用户|\d+月\d+日(修改)?|分享|评论|点赞)/.test(x)
+    );
+    if (t) return t;
+  }
+  // 兜底才用 <title>，并剥掉平台后缀
+  const m = s.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  let t = m ? stripTags(m[1]) : '';
+  t = t.replace(/\s*[-—|·]\s*(飞书|Feishu|Lark|云文档|Docs).*$/i, '').trim();
+  return /^(docs|wiki|飞书|feishu|lark)$/i.test(t) ? '' : t;
+}
+
+/** 判断飞书返回的是不是「无内容壳页」（多为权限未开匿名 / 文档不存在） */
+function feishuLooksEmpty(html, text) {
+  const t = String(text || '').trim();
+  if (t.length < 40) return true;
+  // 壳页特征：可见文本极短且只含 Wiki / Docs / 登录 等词
+  if (t.length < 120 && /^(wiki|docs|飞书|feishu|文档)?[\s\S]{0,20}$/i.test(t)) return true;
+  if (/<title[^>]*>\s*(Wiki|Docs|飞书|Feishu)\s*<\/title>/i.test(html) && t.length < 200) return true;
+  return false;
+}
+
+/** 抓取飞书文档，返回 {ok,title,content,error} */
+async function fetchFeishu(target) {
+  let u;
+  try {
+    u = new URL(target);
+  } catch (e) {
+    return { ok: false, error: '链接格式不正确' };
+  }
+  if (!/(^|\.)(feishu\.cn|larksuite\.com|feishu\.net)$/i.test(u.hostname)) {
+    return { ok: false, error: '只支持飞书文档链接（feishu.cn / larksuite.com）' };
+  }
+  if (!/^https?:$/.test(u.protocol)) return { ok: false, error: '只支持 http(s) 链接' };
+
+  let r;
+  try {
+    // redirect:'follow' 交给平台自动跟随整条登录重定向链并回带 Cookie —— 不要改成 manual
+    r = await fetch(u.href, {
+      redirect: 'follow',
+      headers: {
+        'user-agent': UA,
+        accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'accept-language': 'zh-CN,zh;q=0.9',
+      },
+    });
+  } catch (e) {
+    return { ok: false, error: '抓取失败（网络不可达）：' + String((e && e.message) || e) };
+  }
+  if (!r.ok) return { ok: false, error: '抓取失败（上游返回 ' + r.status + '）' };
+
+  const html = await r.text();
+  const title = feishuTitleOf(html);
+
+  // 优先取正文容器
+  let content = '';
+  const containers = [
+    /<div[^>]+class="[^"]*\brender-unit\b[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/i,
+    /<div[^>]+class="[^"]*\bpage-block\b[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+  ];
+  for (const re of containers) {
+    const m = html.match(re);
+    if (m) {
+      const t = htmlToText(m[1]);
+      if (t.length > content.length) content = t;
+    }
+    if (content.length >= 80) break;
+  }
+  if (content.length < 80) {
+    // 兜底：整页纯文本（会把导航词带进来，所以再按首个正文标志截取）
+    let all = htmlToText(html);
+    const anchor = all.search(/(输入\s*[“"]?\s*\/\s*[”"]?\s*快速插入内容|一、|前言|方法)/);
+    if (anchor > 0 && anchor < 600) all = all.slice(anchor);
+    if (all.length > content.length) content = all;
+  }
+  content = content.replace(/\n{3,}/g, '\n\n').trim();
+
+  // 清理正文头部的编辑器噪声：占位符 / 作者名 / 修改时间 / 工具条词
+  content = content
+    .split('\n')
+    .filter((ln) => {
+      const x = ln.trim();
+      if (!x) return true;
+      if (/^输入\s*[“"]?\s*\/\s*[”"]?\s*快速插入内容$/.test(x)) return false;
+      if (/^(Docs|Wiki|分享|问问豆包|最近修改|评论|点赞|收藏)$/.test(x)) return false;
+      if (/^(用户\d+|匿名用户)$/.test(x)) return false;
+      if (/^\d+月\d+日(修改)?$/.test(x)) return false;
+      return true;
+    })
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  if (feishuLooksEmpty(html, content)) {
+    return {
+      ok: false,
+      error:
+        '文档没有匿名阅读权限（或链接失效）。请在飞书里把该文档设为「互联网上获得链接的人可阅读」，再重新抓取。',
+    };
+  }
+  return { ok: true, title, content };
+}
+
+/* ---------- 入口 ---------- */
+
+function json(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'access-control-allow-origin': '*',
+      'cache-control': 'public, max-age=900',
+    },
+  });
+}
+
+export async function onRequestGet({ request }) {
+  const qs = new URL(request.url).searchParams;
+
+  // 飞书文档抓取：GET /api/feishu?url=<encoded feishu url>
+  const feishuUrl = qs.get('url');
+  if (feishuUrl && /feishu\.cn|larksuite\.com/i.test(feishuUrl)) {
+    const res = await fetchFeishu(feishuUrl);
+    if (!res.ok) return json({ ok: false, error: res.error }, 200);
+    return json({ ok: true, title: res.title || '', content: res.content });
+  }
+
+  const src = (qs.get('src') || '').toLowerCase();
+  const cfg = SOURCES[src];
+  if (!cfg) return json({ ok: false, error: 'unknown src: ' + src }, 400);
+
+  const limit = Math.min(40, Math.max(1, parseInt(qs.get('limit') || '20', 10) || 20));
+  try {
+    const r = await fetch(cfg.url, {
+      headers: {
+        'user-agent': UA,
+        accept: 'text/html,application/xhtml+xml',
+        'accept-language': 'zh-CN,zh;q=0.9',
+      },
+      cf: { cacheTtl: 900, cacheEverything: false },
+    });
+    if (!r.ok) return json({ ok: false, error: 'upstream ' + r.status }, 502);
+    const html = await r.text();
+    const items = cfg.parse(html)
+      .slice(0, limit)
+      .map((x) => ({ t: x.t, u: x.u, d: x.d || '', s: x.s || cfg.src, ...(x.digest ? { digest: x.digest } : {}) }));
+    return json({
+      ok: true,
+      name: cfg.name,
+      cat: cfg.cat,
+      src: 'cloudflare-pages-function',
+      fetchTime: new Date().toISOString(),
+      count: items.length,
+      items,
+    });
+  } catch (e) {
+    return json({ ok: false, error: String((e && e.message) || e) }, 500);
+  }
+}
