@@ -205,7 +205,151 @@ const SOURCES = {
    3) 匿名可读的文档才能拿到正文；若权限未开匿名，「只读链接」打开后飞书会返回
       一个 HTTP 200 但正文为空的壳页（可见文字往往只有 "Wiki"/"Docs" 几个字），
       此时不能报「网络错误」，要明确提示权限问题。
+   4) 【v2.3.11 关键改进】**不要从 HTML 抠正文，要用页面里的结构化文档树。**
+      飞书 SSR 页面内联了 `window.DATA = Object.assign({}, window.DATA, { clientVars:
+      Object({ data: { block_map: {...} } }) })`，block_map 是「块 ID → 块数据」映射，
+      每个块形如：
+        { id, version, data: { type:'heading1'|'heading2'|'heading3'|'bullet'|
+          'ordered'|'text'|'page', parent_id, children:[块ID...],
+          text:{ initialAttributedTexts:{ text:{ "0":"正文" } } } } }
+      **这才是文档的真实结构**：层级、类型、编号一目了然，无任何 HTML 噪声。
+      之前用 htmlToText 抠 HTML 会出现严重格式退化——因为飞书把「编号」和「内容」
+      渲染成**两个独立的 div**（如 `1.` 一个 div、`马哲题：` 另一个 div），
+      无脑按标签换行就会把它们拆成两行；子级项目符号「◦」同理，符号与文字分离。
+      改为读 block_map 后，输出即与原文档排版一致（见 blockMapToMarkdown）。
+      兜底：万一 block_map 结构变了（飞书改版），退回 HTML 抠字，保证不至于全废。
 */
+
+/** 从 HTML 中按大括号配平抽出 block_map 的 JSON 文本（字符串感知，避免误判括号） */
+function extractBlockMapJson(html) {
+  const s = String(html || '');
+  let i = s.indexOf('"block_map"');
+  if (i < 0) return '';
+  const braceStart = s.indexOf('{', i + '"block_map"'.length);
+  if (braceStart < 0) return '';
+  let depth = 0, inStr = false, esc = false;
+  for (let k = braceStart; k < s.length; k++) {
+    const c = s[k];
+    if (esc) { esc = false; continue; }
+    if (c === '\\') { esc = true; continue; }
+    if (c === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (c === '{') depth++;
+    else if (c === '}') {
+      depth--;
+      if (depth === 0) return s.slice(braceStart, k + 1);
+    }
+  }
+  return '';
+}
+
+/** 取块内纯文本 */
+function blockText(d) {
+  try {
+    const t = d && d.text && d.text.initialAttributedTexts && d.text.initialAttributedTexts.text;
+    if (!t) return '';
+    // text 是 { "0": "...", "1": "..." } 的拼接形式
+    return Object.keys(t)
+      .sort((a, b) => Number(a) - Number(b))
+      .map((k) => t[k])
+      .join('');
+  } catch (e) {
+    return '';
+  }
+}
+
+/** 把 block_map 文档树转成 Markdown（保持原文档的标题层级与列表缩进）
+ *
+ * 【为什么最终统一用「数字编号 + 缩进」输出，而不是照搬飞书的 a./b./c.】
+ *   工作台的积累页解析器（index.html 约 4968 行）只把 `^\d+[\.、]` 当成「新条目」，
+ *   字母编号不认。实测三种输出在前端解析后的效果：
+ *     · 照搬交替编号(a./b./c.) → 话题 17 / 条目 56，但条目文本里残留 "a. …" 前缀；
+ *     · 统一数字编号           → 话题 17 / 条目 56，文本最干净（编号被前端消费掉）；
+ *     · 全 bullet              → 「一、做题方法」被炸成 17 个平铺条目，层级全丢。
+ *   所以输出：1./2./3. + 每层 2 空格缩进；前端会按缩进把深层项归到上层条目里，
+ *   最终渲染出的层级与编号由工作台自己决定，观感干净。
+ *
+ *   映射规则：
+ *     heading1/2/3 → #/##/###（前端会识别为话题分隔）
+ *     ordered → N. （同级递增，bullet/text 不占号）
+ *     bullet  → -
+ *     text    → 原样一行
+ *     page    → 文档根，只取其 children
+ */
+function blockMapToMarkdown(map) {
+  if (!map) return '';
+  // 找根块（type==='page'），找不到就挑一个 parent_id 不在 map 里的
+  let rootId = null;
+  for (const id in map) {
+    const d = map[id] && map[id].data;
+    if (d && d.type === 'page') { rootId = id; break; }
+  }
+  if (!rootId) {
+    for (const id in map) {
+      const d = map[id] && map[id].data;
+      if (d && d.parent_id && !map[d.parent_id]) { rootId = id; break; }
+    }
+  }
+  const lines = [];
+  const heading = { heading1: '#', heading2: '##', heading3: '###' };
+
+  // 遍历某父块的 children；同层 ordered 兄弟共享递增计数（bullet/text 不占号）
+  function walkChildren(kids, depth) {
+    let orderedNo = 0;
+    for (const cid of kids) {
+      const rec = map[cid];
+      if (!rec || !rec.data) continue;
+      const d = rec.data;
+      const type = d.type || 'text';
+      const txt = blockText(d);
+      const sub = Array.isArray(d.children) ? d.children : [];
+      const indent = '  '.repeat(Math.max(0, depth));
+
+      if (heading[type]) {
+        // 标题本身用 # 表达，其下内容的缩进层级 +1
+        if (txt) lines.push(indent + heading[type] + ' ' + txt);
+        walkChildren(sub, depth + 1);
+        continue;
+      }
+      if (type === 'ordered') {
+        orderedNo += 1;
+        if (txt) lines.push(indent + orderedNo + '. ' + txt);
+        walkChildren(sub, depth + 1);
+        continue;
+      }
+      if (type === 'bullet') {
+        if (txt) lines.push(indent + '- ' + txt);
+        walkChildren(sub, depth + 1);
+        continue;
+      }
+      // text / 其它类型：当普通段落
+      if (txt) lines.push(indent + txt);
+      walkChildren(sub, depth + 1);
+    }
+  }
+
+  if (rootId) {
+    const root = map[rootId] && map[rootId].data;
+    walkChildren(root && Array.isArray(root.children) ? root.children : [], 0);
+  }
+
+  return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/** 从 HTML 抽出结构化文档树并转 Markdown；成功返回字符串，失败返回 '' */
+function feishuMarkdownFromBlockMap(html) {
+  const raw = extractBlockMapJson(html);
+  if (!raw || raw.length < 50) return '';
+  let map = null;
+  try {
+    map = JSON.parse(raw);
+  } catch (e) {
+    return '';
+  }
+  if (!map || typeof map !== 'object') return '';
+  const md = blockMapToMarkdown(map);
+  return md && md.length >= 30 ? md : '';
+}
 
 /** 去掉 <script>/<style> 与标签，实体还原，保留换行结构（飞书正文提取用） */
 function htmlToText(html) {
@@ -408,44 +552,50 @@ async function fetchFeishu(target) {
 
   const title = feishuTitleOf(html);
 
-  // 优先取正文容器
-  let content = '';
-  const containers = [
-    /<div[^>]+class="[^"]*\brender-unit\b[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/i,
-    /<div[^>]+class="[^"]*\bpage-block\b[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-  ];
-  for (const re of containers) {
-    const m = html.match(re);
-    if (m) {
-      const t = htmlToText(m[1]);
-      if (t.length > content.length) content = t;
-    }
-    if (content.length >= 80) break;
-  }
-  if (content.length < 80) {
-    // 兜底：整页纯文本（会把导航词带进来，所以再按首个正文标志截取）
-    let all = htmlToText(html);
-    const anchor = all.search(/(输入\s*[“"]?\s*\/\s*[”"]?\s*快速插入内容|一、|前言|方法)/);
-    if (anchor > 0 && anchor < 600) all = all.slice(anchor);
-    if (all.length > content.length) content = all;
-  }
-  content = content.replace(/\n{3,}/g, '\n\n').trim();
+  // 【首选】结构化文档树 → Markdown（格式与原文档一致）
+  let content = feishuMarkdownFromBlockMap(html);
+  let source = content ? 'block_map' : '';
 
-  // 清理正文头部的编辑器噪声：占位符 / 作者名 / 修改时间 / 工具条词
-  content = content
-    .split('\n')
-    .filter((ln) => {
-      const x = ln.trim();
-      if (!x) return true;
-      if (/^输入\s*[“"]?\s*\/\s*[”"]?\s*快速插入内容$/.test(x)) return false;
-      if (/^(Docs|Wiki|分享|问问豆包|最近修改|评论|点赞|收藏)$/.test(x)) return false;
-      if (/^(用户\d+|匿名用户)$/.test(x)) return false;
-      if (/^\d+月\d+日(修改)?$/.test(x)) return false;
-      return true;
-    })
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  // 【兜底】HTML 抠字（飞书改版导致 block_map 结构变化时用）
+  if (!content) {
+    const containers = [
+      /<div[^>]+class="[^"]*\brender-unit\b[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/i,
+      /<div[^>]+class="[^"]*\bpage-block\b[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+    ];
+    for (const re of containers) {
+      const m = html.match(re);
+      if (m) {
+        const t = htmlToText(m[1]);
+        if (t.length > content.length) content = t;
+      }
+      if (content.length >= 80) break;
+    }
+    if (content.length < 80) {
+      // 再兜底：整页纯文本（会把导航词带进来，所以再按首个正文标志截取）
+      let all = htmlToText(html);
+      const anchor = all.search(/(输入\s*[“"]?\s*\/\s*[”"]?\s*快速插入内容|一、|前言|方法)/);
+      if (anchor > 0 && anchor < 600) all = all.slice(anchor);
+      if (all.length > content.length) content = all;
+    }
+    content = content.replace(/\n{3,}/g, '\n\n').trim();
+
+    // 清理正文头部的编辑器噪声：占位符 / 作者名 / 修改时间 / 工具条词
+    content = content
+      .split('\n')
+      .filter((ln) => {
+        const x = ln.trim();
+        if (!x) return true;
+        if (/^输入\s*[“"]?\s*\/\s*[”"]?\s*快速插入内容$/.test(x)) return false;
+        if (/^(Docs|Wiki|分享|问问豆包|最近修改|评论|点赞|收藏)$/.test(x)) return false;
+        if (/^(用户\d+|匿名用户)$/.test(x)) return false;
+        if (/^\d+月\d+日(修改)?$/.test(x)) return false;
+        return true;
+      })
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    if (content) source = 'html';
+  }
 
   if (feishuLooksEmpty(html, content)) {
     return {
@@ -454,7 +604,7 @@ async function fetchFeishu(target) {
         '文档没有匿名阅读权限（或链接失效）。请在飞书里把该文档设为「互联网上获得链接的人可阅读」，再重新抓取。',
     };
   }
-  return { ok: true, title, content };
+  return { ok: true, title, content, source };
 }
 
 /* ---------- 入口 ---------- */
