@@ -195,9 +195,11 @@ const SOURCES = {
         302 → 原地址?login_redirect_times=1
         302 → 原地址
         200 ← 完整页面（约 1MB，附带若干 Set-Cookie）
-      这里**必须让 fetch 自己跟随整条链并带上 Cookie**（默认 redirect:'follow' 即满足），
-      不能手工 302 跳转、也不能 `redirect:'manual'`——否则拿到的只是登录页，
-      甚至把整条链当成无限循环报错（"infinite loop"）而误判成「文档不存在」。
+      **这条链必须逐跳跟、且每跳都要带上前面收到的 Cookie**，飞书正是靠这些
+      Cookie 判断「本次访问已放行」。详见下方 fetchFollowingWithCookies() 的注释：
+      · 直接用 fetch(...,{redirect:'follow'}) → CF 环境不回带跨域 Cookie →
+        永远停在 login_redirect_times=4 的登录页（实测只有 92KB，正文为 0）。
+      · 正确做法：redirect:'manual' + 自建 Cookie 罐逐跳跟链 → 200，1MB，正文完整。
    2) 正文容器类名是 `render-unit` / `page-block`（**没有** docx-content / wiki-content，
       前端旧代码找的类名是错的）。抓不到容器时兜底取整页纯文本再截断。
    3) 匿名可读的文档才能拿到正文；若权限未开匿名，「只读链接」打开后飞书会返回
@@ -284,6 +286,95 @@ function feishuTitleOf(html) {
   return /^(docs|wiki|飞书|feishu|lark)$/i.test(t) ? '' : t;
 }
 
+/** 手工跟链 + Cookie 罐 抓取飞书页面
+ *
+ * ⚠️⚠️ 这是本功能最关键、也最容易踩错的一步，务必读完再改 ⚠️⚠️
+ *
+ * 为什么不能用 fetch(url,{redirect:'follow'}) 了事？
+ *   实测（Cloudflare Pages Function 线上环境）：
+ *     · fetch(url,{redirect:'follow'})  → 最终停在
+ *         accounts.feishu.cn/accounts/page/login?...&login_redirect_times=4
+ *       只有 92KB 的登录页，正文一个字都拿不到。
+ *   Python 对照实验（同一 URL、同一 UA）：
+ *     · 带 CookieJar（每跳自动回带 Cookie） → 200，1,061,173 字节，正文完整 ✓
+ *     · 不带 Cookie                         → 抛 "infinite loop" 错误 ✗
+ *   结论：**飞书是靠登录跳转链路上的 Set-Cookie 来判断「这次访问已放行」的。**
+ *   而 CF 的 fetch 在跨域重定向时**不会自动持久化、也不会回带 Cookie**，
+ *   于是每一跳都被当成新访客，重新踢回登录页，最终停死在登录页。
+ *
+ * 解法：自己实现一个极简 Cookie 罐，手动跟 302：
+ *   1) redirect:'manual' 逐跳处理，每跳读 Set-Cookie 存进 jar；
+ *   2) 下一跳把 jar 里同域（含父域）的 Cookie 拼成 Cookie 头带上；
+ *   3) 最多跟 12 跳（实测链长约 5~7 跳），防死循环；
+ *   4) 拿到 2xx 就返回 HTML 全文。
+ * 注意 Set-Cookie 可能有多条，Headers.getSetCookie() 可用时优先用它。
+ */
+function cookieHeaderFrom(jar, urlStr) {
+  let host = '';
+  try { host = new URL(urlStr).hostname; } catch (e) { return ''; }
+  const parts = [];
+  for (const c of jar) {
+    // 简化域匹配：精确域 或 父域后缀（飞书自身 cookie 基本是 .feishu.cn 级）
+    if (host === c.domain || host.endsWith(c.domain.replace(/^\./, ''))) {
+      parts.push(c.name + '=' + c.value);
+    }
+  }
+  return parts.join('; ');
+}
+
+function absorbSetCookies(jar, res, urlStr) {
+  let host = '';
+  try { host = new URL(urlStr).hostname; } catch (e) { return; }
+  let list = [];
+  if (typeof res.headers.getSetCookie === 'function') {
+    list = res.headers.getSetCookie();
+  } else {
+    const raw = res.headers.get('set-cookie');
+    if (raw) list = raw.split(/,(?=[^;,]+=)/g);
+  }
+  for (const line of list) {
+    const kv = String(line).split(';')[0].trim();
+    const eq = kv.indexOf('=');
+    if (eq <= 0) continue;
+    const name = kv.slice(0, eq).trim();
+    const value = kv.slice(eq + 1).trim();
+    if (!name) continue;
+    // 取 Domain 属性，缺省按当前 host
+    const dm = String(line).match(/;\s*Domain=([^;]+)/i);
+    const domain = dm ? dm[1].trim().toLowerCase() : host;
+    const old = jar.findIndex((c) => c.name === name && c.domain === domain);
+    const rec = { name, value, domain };
+    if (old >= 0) jar[old] = rec; else jar.push(rec);
+  }
+}
+
+async function fetchFollowingWithCookies(startUrl) {
+  const jar = [];
+  let cur = startUrl;
+  for (let hop = 0; hop < 12; hop++) {
+    const headers = {
+      'user-agent': UA,
+      accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'accept-language': 'zh-CN,zh;q=0.9',
+    };
+    const ck = cookieHeaderFrom(jar, cur);
+    if (ck) headers.cookie = ck;
+
+    const res = await fetch(cur, { redirect: 'manual', headers });
+    absorbSetCookies(jar, res, cur);
+
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get('location');
+      if (!loc) return await res.text();
+      cur = new URL(loc, cur).href;
+      continue;
+    }
+    // 2xx（或其它终态）→ 直接读全文
+    return await res.text();
+  }
+  return null; // 超过跳数上限，视为失败
+}
+
 /** 判断飞书返回的是不是「无内容壳页」（多为权限未开匿名 / 文档不存在） */
 function feishuLooksEmpty(html, text) {
   const t = String(text || '').trim();
@@ -307,23 +398,14 @@ async function fetchFeishu(target) {
   }
   if (!/^https?:$/.test(u.protocol)) return { ok: false, error: '只支持 http(s) 链接' };
 
-  let r;
+  let html = '';
   try {
-    // redirect:'follow' 交给平台自动跟随整条登录重定向链并回带 Cookie —— 不要改成 manual
-    r = await fetch(u.href, {
-      redirect: 'follow',
-      headers: {
-        'user-agent': UA,
-        accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'accept-language': 'zh-CN,zh;q=0.9',
-      },
-    });
+    html = await fetchFollowingWithCookies(u.href);
   } catch (e) {
     return { ok: false, error: '抓取失败（网络不可达）：' + String((e && e.message) || e) };
   }
-  if (!r.ok) return { ok: false, error: '抓取失败（上游返回 ' + r.status + '）' };
+  if (!html) return { ok: false, error: '抓取失败（上游无响应）' };
 
-  const html = await r.text();
   const title = feishuTitleOf(html);
 
   // 优先取正文容器
