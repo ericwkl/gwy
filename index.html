@@ -591,12 +591,10 @@ function openModal(html){
   document.getElementById('modalBox').innerHTML = html;
   document.getElementById('modalMask').classList.add('show');
 }
-function closeModal(){
-  document.getElementById('modalMask').classList.remove('show');
-  // 清除详情返回跟踪（防止从主页直接打开详情时误回到旧列表）
-  _detailReturnFn=null;
-  _detailReturnFnMistake=null;
-}
+/* v2.3.5：此处原有一个重复的 closeModal 定义（无试卷自动保存逻辑），
+   因下面第 4142 行另有同名函数声明、JS 后声明覆盖前声明，实际生效的始终是后者，
+   这里属于死代码。已删除，避免后续维护时改错位置。
+   注：遮罩点击不触发 closeModal 的规则见下方 modalMask 的 click 监听。 */
 document.getElementById('modalMask').addEventListener('click', e=>{
   if(e.target.id==='modalMask'){
     // v2.2.50：编辑弹窗（含 input/textarea/select）点遮罩空白处不关闭，防误触丢输入内容；
@@ -4140,20 +4138,40 @@ function togglePaperExamType(){
 let paperModalId='';
 let paperModalCanceled=false;
 function closeModal(){
-  // 试卷弹窗通过遮罩或✕关闭（未点取消/保存）→ 自动保存已填内容
+  /* v2.3.5：试卷弹窗自动保存（仅当确有填写内容时）。
+     修复三个问题：
+       ① 原代码 `paperModalId=''` 写在 savePaper 调用之前，等于把 id 清空后再传参，
+          导致**编辑已有试卷时退出也会多建一张「未命名试卷」**。改为先取原始 id 再清状态。
+       ② 原本无论是否填了内容都保存 → 打开弹窗直接 ✕ 也会凭空多出一张空白试卷。
+          新增 hasInput 判定：名称、备注、任一模块分数、分析文本/链接全空 → 视为未填写，直接丢弃。
+       ③ 原校验失败分支会把 paperModalCanceled 置回 false 并保持弹窗打开，容易卡住；
+          现在只有"确实填了内容但校验不通过"才拦截，且给出明确提示。 */
   if(document.getElementById('pp_name') && !paperModalCanceled){
     paperModalCanceled=true; // 防重入
+    const editId=paperModalId; // 先保存，再清空
     paperModalId='';
-    if(savePaper(paperModalId, {auto:true})){
+    const nameEl=document.getElementById('pp_name');
+    const dateEl=document.getElementById('pp_date');
+    const noteEl=document.getElementById('pp_note');
+    const modFilled=[...document.querySelectorAll('[data-mod][data-kind]')].some(i=>String(i.value||'').trim()!=='');
+    const analysisFilled=((document.getElementById('pp_analysis')||{}).value||'').trim()!==''
+                      || ((document.getElementById('pp_analysis_url')||{}).value||'').trim()!=='';
+    const hasInput=!!(nameEl&&nameEl.value.trim()) || !!(noteEl&&noteEl.value.trim()) || modFilled || analysisFilled;
+    if(!hasInput){
+      // 完全空白 → 丢弃，不产生「未命名试卷」
       document.getElementById('modalMask').classList.remove('show');
+      paperModalCanceled=false;
+      return;
+    }
+    if(savePaper(editId, {auto:true})){
+      document.getElementById('modalMask').classList.remove('show');
+      paperModalCanceled=false;
     }else{
       // 校验失败：弹窗保持打开，提示缺失字段+聚焦
       paperModalCanceled=false;
-      const n=document.getElementById('pp_name'), d=document.getElementById('pp_date');
       const miss=[];
-      if(!n.value.trim()) miss.push('名称');
-      if(!d.value.trim()) miss.push('日期');
-      if(miss.length){ toast('请补充'+miss.join('和')+'后再次关闭（弹窗不会关闭）'); n.focus(); }
+      if(dateEl && !dateEl.value.trim()) miss.push('日期');
+      if(miss.length){ toast('请补充'+miss.join('和')+'后再次关闭（弹窗不会关闭）'); (dateEl||nameEl).focus(); }
       else toast('自动保存失败，请重试');
     }
     return;
@@ -4891,6 +4909,30 @@ async function renderAccu(){
             if(curTopic&&curItems.length) topics.push({topic:curTopic, items:curItems});
             curTopic=line; curItems=[]; curIndent=-1;
             continue;
+          }
+          /* v2.3.6：markdown 标题（## / ### 等）统一作为话题分隔。
+             背景：飞书 blocks 重建后标题带 `#` 前缀，但上面第 4901 行 stripped
+             会把 `#` 一起剥掉，导致解析器无从判断"这是标题"。后果（用户反馈
+             「唯物论这里识别错了吧」）：`### 唯物论`/`### 辩证法`/`### 认识论`
+             不命中任何标题规则，被当成普通内容行：
+               · 「唯物论」粘成上一条的尾巴（出现 `…根本途径\n辩证法`）；
+               · 「认识论」粘到「内部相互作用：联系」后面；
+               · 三者内容全挤进「辩证唯物主义」一个话题，结构错乱。
+             处理：识别 `##`~`######` 开头的行 → 开新话题。
+             若剥掉 `#` 后仍是「（一）XXX」形态，继续剥离编号前缀，
+             保持与下面 m2 分支产出的 topic 名一致（否则常识会出现
+             「（一）宪法」这种带编号的话题名，属回归——已实测避免）。 */
+          if(/^#{2,6}\s+\S/.test(raw.trim())){
+            let h=line.replace(/^#+\s*/,'').trim();
+            const hNum=h.match(/^[（(][一二三四五六七八九十\d]+[）)]\s*(.+)$/);
+            if(hNum) h=hNum[1].trim();
+            h=h.replace(/^[一二三四五六七八九十]+[、，]\s*/,'').trim();
+            if(h){
+              if(curItem){ curItems.push(curItem); curItem=null; }
+              if(curTopic&&curItems.length) topics.push({topic:curTopic, items:curItems});
+              curTopic=h; curItems=[]; curIndent=-1;
+              continue;
+            }
           }
           // 二级标题：（一）宪法
           const m2=line.match(/^[（(][一二三四五六七八九十\d]+[）)]\s*(.+)$/);
@@ -7020,7 +7062,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.3.4';
+const APP_VERSION='v2.3.6';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
