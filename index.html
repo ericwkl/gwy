@@ -4636,7 +4636,12 @@ async function renderAccu(){
   const seed=getAccuSeed();
   // v2.2.57：缓存带版本号——解析/渲染逻辑升级时手动+1，强制旧版本渲染的缓存 HTML 失效，
   // 防止跨版本复用旧缓存（如 v2.2.55 渲染的【莫此】拆词 HTML 在 v2.2.56 下继续命中）
-  const ACCU_CACHE_VER=12;  // v2.2.97：解析逻辑升级为「缩进感知归属」，旧缓存 HTML 必须失效
+  const ACCU_CACHE_VER=13;  // v2.3.7：政治理论/常识解析器支持 markdown `#` 标题（唯物论/辩证法/认识论
+                            // 独立成话题），解析逻辑升级 → 旧缓存 HTML 必须失效。**上次踩坑**：v2.3.6
+                            // 改了第 4913 行解析规则却忘了升这个常量，导致用户端命中当天早先渲染的缓存
+                            // （ver=12 命中 → 直接复用旧 HTML），页面版本号已是 v2.3.6 但内容看着没变化。
+                            // 教训：凡改动「解析逻辑 / 渲染结构 / 卡片内容」，必须同步 ACCU_CACHE_VER+1。
+                            // v2.2.97：解析逻辑升级为「缩进感知归属」，旧缓存 HTML 必须失效
                             // （否则用户端命中 v2.2.96 渲染的缓存，新解析结果永远不显示）；
                             // v2.2.85：时评空数据不再落缓存（修复"时评卡消失且当天刷不出来"）
   // 知识库签名：条数+最新更新时间，知识库变化时缓存自动失效
@@ -4999,9 +5004,14 @@ async function renderAccu(){
       if(!curTopic && curItems.length) topics.push({topic:'知识点', items:curItems});
 
       if(topics.length){
-        // 优先选有≥5条知识点的话题，确保抽取效果好
-        const rich=topics.filter(t=>t.items.length>=5);
-        const pool=rich.length?rich:topics.filter(t=>t.items.length>=2);
+        // v2.3.7：候选池门槛由「≥5 条」下调为「≥2 条」。
+        // 背景：v2.3.6 把 markdown `#` 标题识别为话题分隔后，「唯物论」(4 条)、「认识论」(4 条)
+        // 等小节从原先的大话题里拆了出来，条数不足 5，反而**掉出轮转池**——用户永远刷不到它们，
+        // 观感上等同于"改了也没变化"（保留 5 条门槛时，政治理论 22 个话题只有 11 个能进池）。
+        // 下调到 2 条后：22 个话题里 19 个可轮转（仅「一、做题方法」2 条以下者除外），
+        // 每个话题内容天然来自同一小节，条数少不等于质量低。
+        const rich=topics.filter(t=>t.items.length>=2);
+        const pool=rich.length?rich:topics.filter(t=>t.items.length>=1);
         const finalPool=pool.length?pool:topics;
         // v2.2.43：话题按天顺序轮转，保证相邻天展示不同话题（避免常识等模块每天撞同一话题）
         // v2.2.83：并入卡级种子——常识卡与政治理论卡共用这段逻辑，卡种子不同则各自独立轮换
@@ -7062,7 +7072,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.3.6';
+const APP_VERSION='v2.3.7';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
