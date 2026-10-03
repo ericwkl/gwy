@@ -5191,9 +5191,11 @@ const FEISHU_PROXIES = [
 async function fetchFeishuContent(url){
   let html=null, ok=false, title='', content='';
   const candidates=[
-    // 国内可达：自建代理服务（优先，速度最快）
-    (u)=>NEWS_PROXY+'/api/feishu?url='+encodeURIComponent(u),
+    // 首选：同源 Cloudflare Function（v2.3.10 已把飞书抓取搬进来，不再依赖外部代理）
+    (u)=>'/api/feishu?url='+encodeURIComponent(u),
     ...FEISHU_PROXIES.map(p=>(u=>p+encodeURIComponent(u))),
+    // 兜底：旧沙箱代理与公共代理（多数已不可用，保留只为兜底）
+    (u)=>NEWS_PROXY+'/api/feishu?url='+encodeURIComponent(u),
     u=>'https://api.allorigins.win/raw?url='+encodeURIComponent(u),
     u=>'https://api.codetabs.com/v1/proxy?quest='+encodeURIComponent(u),
   ];
@@ -5215,13 +5217,13 @@ async function fetchFeishuContent(url){
       }
     }catch(e){ continue; }
   }
-  // 第三方代理返回的是 HTML → 解析
+  // 第三方代理返回的是 HTML → 解析（飞书正文容器为 render-unit / page-block）
   if(ok && !title && html){
     const doc=new DOMParser().parseFromString(html,'text/html');
-    title=doc.querySelector('title')?.textContent?.replace(/[-—]\s*飞书.*$/,'').trim()||'';
-    const contentEl=doc.querySelector('.docx-content')||doc.querySelector('article')||doc.querySelector('.wiki-content')||doc.body;
+    title=doc.querySelector('title')?.textContent?.replace(/\s*[-—|·]\s*(飞书|Feishu|Lark|云文档|Docs).*$/i,'').trim()||'';
+    const contentEl=doc.querySelector('.render-unit')||doc.querySelector('.page-block')||doc.querySelector('.docx-content')||doc.querySelector('article')||doc.querySelector('.wiki-content')||doc.body;
     if(contentEl) content=contentEl.innerText||contentEl.textContent||'';
-    content=content.replace(/\n{3,}/g,'\n\n').trim();
+    content=content.replace(/[\u200b-\u200f\ufeff]/g,'').replace(/\n{3,}/g,'\n\n').trim();
     if(content.length<50){
       const meta=doc.querySelector('meta[name=description]')?.content||'';
       content=meta||content;
@@ -5239,7 +5241,7 @@ async function importFeishu(){
   status.style.color='var(--primary)';
   const r=await fetchFeishuContent(url);
   if(!r){
-    status.innerHTML='❌ 抓取失败。请确认文档是「互联网公开」（分享→权限→互联网上获得链接的任何人可阅读），并粘贴<u>分享链接</u>（docs.feishu.cn/docx/... 形式，不是 my.feishu.cn/wiki/...）。<br>或：电脑打开→全选复制→粘贴到内容框 / 导出Word上传';
+    status.innerHTML='❌ 抓取失败。排查顺序：<br>① 文档权限 —— 打开文档 → 分享 → 权限设为「互联网上获得链接的任何人可阅读」；<br>② 链接形式 —— 用<b>分享</b>按钮复制出来的链接（wiki/… 或 docx/… 都可以）；<br>③ 仍不行就用兜底办法 —— 电脑打开文档 → 全选复制 → 粘贴到内容框，或导出 Word 上传。';
     status.style.color='var(--danger)';
     return;
   }
@@ -5264,7 +5266,7 @@ async function importFeishuToSettings(){
   status.style.color='var(--primary)';
   const r=await fetchFeishuContent(url);
   if(!r){
-    status.innerHTML='❌ 抓取失败。请确认文档是「互联网公开」权限，并粘贴分享链接。';
+    status.innerHTML='❌ 抓取失败。请确认文档权限已设为「互联网上获得链接的任何人可阅读」（分享 → 权限）；若仍失败，可在文档页全选复制后粘贴到内容框。';
     status.style.color='var(--danger)';
     return;
   }
@@ -7080,7 +7082,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.3.8';
+const APP_VERSION='v2.3.10';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
