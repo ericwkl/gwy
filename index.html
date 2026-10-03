@@ -3112,8 +3112,16 @@ async function loadScriptAny(urls, globalName){
   }
   return globalName ? !!window[globalName] : false;
 }
-const JSZIP_CDNS=['https://cdn.bootcdn.net/ajax/libs/jszip/3.10.1/jszip.min.js','https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js','https://unpkg.com/jszip@3.10.1/dist/jszip.min.js'];
-const MAMMOTH_CDNS=['https://cdn.bootcdn.net/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js','https://cdn.jsdelivr.net/npm/mammoth@1.6.0/browser/mammoth.browser.min.js','https://unpkg.com/mammoth@1.6.0/browser/mammoth.browser.min.js'];
+/* v2.3.8：解析库改为「同源优先 + CDN 兜底」。
+   起因（用户报「文档解析库加载失败，请检查网络后重试」）：原先只挂 3 个公共 CDN，
+   实测三者均不稳定——同一 URL 时而 200 时而 404（jsdelivr / unpkg 复现多次间歇性 404），
+   手机端网络一波动就全军覆没。而 gd.gov.cn 那套外部依赖的教训（见 functions_api_news.js）
+   已经证明：**能自托管的资源就别依赖第三方**。
+   现改为：① 站点根目录下的本地文件（与 index.html 同源，随 Pages 一起部署，
+   不受任何 CDN 影响）；② 仍保留原 CDN 作为兜底（本地文件万一缺失/被误删时不至于全废）。 */
+const _SELF_BASE=(location.origin||'')+'/';
+const JSZIP_CDNS=[_SELF_BASE+'jszip.min.js','https://cdn.bootcdn.net/ajax/libs/jszip/3.10.1/jszip.min.js','https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js','https://unpkg.com/jszip@3.10.1/dist/jszip.min.js'];
+const MAMMOTH_CDNS=[_SELF_BASE+'mammoth.browser.min.js','https://cdn.bootcdn.net/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js','https://cdn.jsdelivr.net/npm/mammoth@1.6.0/browser/mammoth.browser.min.js','https://unpkg.com/mammoth@1.6.0/browser/mammoth.browser.min.js'];
 /* 兼容移动浏览器的下载（与下载页一致的方式） */
 function downloadBlob(filename, blob){
   try{
@@ -4217,7 +4225,7 @@ async function paperUploadDoc(input){
       if(!window.mammoth){
         // v2.2.68：多源兜底，失败不再误导成"请尝试.txt格式"
         const ok=await loadScriptAny(MAMMOTH_CDNS,'mammoth');
-        if(!ok){ toast('文档解析库加载失败，请检查网络后重试'); return; }
+        if(!ok){ toast('解析库加载失败：已试过本站与公共 CDN 共 4 个源。请刷新页面重试；若仍失败请改用 .txt 文件'); return; }
       }
       const arrayBuffer=await file.arrayBuffer();
       const result=await window.mammoth.extractRawText({arrayBuffer});
@@ -5155,7 +5163,7 @@ async function uploadDoc(input){
       if(!window.mammoth){
         // v2.2.68：多源兜底，失败不再误导成"请尝试.txt格式"
         const ok=await loadScriptAny(MAMMOTH_CDNS,'mammoth');
-        if(!ok){ toast('文档解析库加载失败，请检查网络后重试'); return; }
+        if(!ok){ toast('解析库加载失败：已试过本站与公共 CDN 共 4 个源。请刷新页面重试；若仍失败请改用 .txt 文件'); return; }
       }
       const arrayBuffer=await file.arrayBuffer();
       const result=await window.mammoth.extractRawText({arrayBuffer});
@@ -7072,7 +7080,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.3.7';
+const APP_VERSION='v2.3.8';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
