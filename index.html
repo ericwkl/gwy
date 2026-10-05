@@ -197,6 +197,13 @@ img{max-width:100%;display:block;}
 /* 错题详情块 */
 .detail-block{background:var(--bg-soft);border-radius:10px;padding:10px 12px;margin-bottom:8px;font-size:13px;color:var(--text);line-height:1.7;white-space:pre-wrap;word-break:break-all;}
 .detail-label{font-size:11px;font-weight:700;color:var(--primary);margin-bottom:4px;}
+/* v2.3.13：错题详情「答案」默认折叠，summary 用箭头指示展开状态 */
+.ans-fold{background:var(--bg-soft);border-radius:10px;margin-bottom:8px;overflow:hidden;}
+.ans-fold>summary{cursor:pointer;padding:10px 12px;font-size:11px;font-weight:700;color:var(--primary);list-style:none;display:flex;align-items:center;gap:5px;user-select:none;}
+.ans-fold>summary::-webkit-details-marker{display:none;}
+.ans-fold>summary::before{content:'▸';display:inline-block;font-size:10px;transition:transform .15s;}
+.ans-fold[open]>summary::before{transform:rotate(90deg);}
+.ans-fold .ans-body{padding:0 12px 10px;font-size:13px;line-height:1.7;white-space:pre-wrap;word-break:break-all;color:var(--text);}
 .review-item .photos img{width:70px;height:70px;object-fit:cover;border-radius:8px;}
 
 /* ========== 语音条 微信样式 ========== */
@@ -666,7 +673,7 @@ function renderHome(){
         <button class="btn btn-sm btn-ghost" onclick="errorListModal()">错题本</button>
         <button class="btn btn-sm btn-outline" onclick="errorModal()">+ 错题</button>
       </div></div>
-    <div style="font-size:11px;color:var(--text-light);margin:-4px 0 4px;">录入当天进列表，之后<b>每周复习一次</b>；点「已掌握」即毕业（不再出现），没做对就保留、下周继续</div>
+    <div style="font-size:11px;color:var(--text-light);margin:-4px 0 4px;">录入后<b>每 7 天复习一次</b>（录入当天开始算）；点「已掌握」即毕业（不再出现），没做对就保留、下周继续</div>
     ${renderTodayErrorEbb()}
   </div>`;
 
@@ -750,7 +757,10 @@ const ERR_GAP=7; // 错题复习间隔（天）
 function errEbbInit(base){
   // _v72 免疫标记必带：否则 v2.2.72 的 shiftStage 迁移每次加载都会把 stage 误减，
   // 表现为「昨天点了已掌握，今天又变回待复习」。
-  return {base, next:base, done:false, times:0, _v72:1};
+  // v2.3.13：首次复习 = 录入日 + 7 天（不再当天进列表）。录入当天只是"刚录入"，
+  //   不算一次复习；用户确认「7天后再复习」。旧数据由 errEbbMigrateFirst 修正。
+  const b=base||todayStr();
+  return {base:b, next:errEbbNext(b, ERR_GAP), done:false, times:0, _v72:1};
 }
 function errEbbNext(fromStr, gap){
   const d=new Date((fromStr||todayStr())+'T00:00:00');
@@ -758,7 +768,8 @@ function errEbbNext(fromStr, gap){
   return localDateStr(d);
 }
 /* 错题状态：优先用新语义字段；旧 5 轮存量数据（有 stage、无 times）自动折算
-   —— 只要点过任何一轮「已掌握」或已 done，都视为毕业（用户拍板：存量全部视为已毕业）。 */
+   —— 只要点过任何一轮「已掌握」或已 done，都视为毕业（用户拍板：存量全部视为已毕业）。
+   v2.3.13：另修正「首次复习日=录入日」的旧值（next===base 且未复习过）→ 推到 base+7 天。 */
 function getErrorEbb(e){
   if(!DB.errorEbb) DB.errorEbb={};
   const st=DB.errorEbb[e.id];
@@ -770,7 +781,13 @@ function getErrorEbb(e){
     else if((st.stage||0)>0){ st.done=true; st.next=''; } // 点过至少一轮 → 视为已掌握毕业
     else{ st.next=st.next||st.base||todayStr(); }
   }
-  if(st.done) st.next='';
+  if(st.done){ st.next=''; return st; }
+  // v2.3.13：首次复习日修正。未复习过（times=0）且 next=base（=录入日，老逻辑留的）
+  //   → 说明这是"刚录入还没复习"，按新规则推到 base+7 天。
+  //   幂等：修正后 next>base，不再命中。
+  if((st.times||0)===0 && st.base && st.next && st.next<=st.base){
+    st.next=errEbbNext(st.base, ERR_GAP);
+  }
   return st;
 }
 /* 错题列表徽章：毕业显示 ✅ 已掌握；未毕业显示下次复习日期（MM-DD） */
@@ -1144,7 +1161,8 @@ function viewMistakeDetail(id){
       ${m.date?`<span>${m.date}</span>`:''}
       ${st.done?`<span style="color:var(--primary);">✅ 已彻底掌握</span>`:''}
     </div>
-    <div class="detail-block"><div class="detail-label">易错知识点</div><div style="white-space:pre-wrap;word-break:break-all;">${escapeHtml(m.point||'')}</div></div>
+    ${m.question?`<div class="detail-block"><div class="detail-label">❓ 问题</div><div style="white-space:pre-wrap;word-break:break-all;">${escapeHtml(m.question)}</div></div>`:''}
+    ${m.point?`<div class="detail-block"><div class="detail-label">💡 改进方式</div><div style="white-space:pre-wrap;word-break:break-all;">${escapeHtml(m.point)}</div></div>`:''}
     ${m.note?`<div class="detail-block"><div class="detail-label">备注</div>${escapeHtml(m.note)}</div>`:''}
     ${m.photos&&m.photos.length?`<div class="detail-block"><div class="detail-label">📷 截图</div><div class="photos">${m.photos.map(p=>`<img src="${b64Url(p)}" onerror="this.onerror=null;this.src='${p}'" onclick="previewImg(this.src)">`).join('')}</div></div>`:''}
     <div class="modal-foot">
@@ -2090,7 +2108,9 @@ function syncRecordToMistakes(moduleKey, rec, oldSnap){
     const question=(rec.question||'').trim();
     const improve=(rec.improve||'').trim();
     if(!improve && !question) return;
-    // 易错知识点 = 改进方法（没有改进时退回问题）；备注留空
+    // v2.3.14：问题与改进方式分开存——point=改进方式（仍作"知识点主字段"，供列表匹配/去重/导出），
+    //   question=问题。旧逻辑只存 point，用户要求两个卡片分开显示。
+    //   没有改进时 point 退回问题，保证列表首行有内容可显示。
     const point = improve || question;
     const note = '';
     // ① 编辑更新：优先找由这条记录产生的考点（recId 关联），更新而不是新建
@@ -2099,6 +2119,7 @@ function syncRecordToMistakes(moduleKey, rec, oldSnap){
       linked.module=mod.key;
       linked.sub=normSub(rec.sub); // v2.2.28：编辑刷题记录换子模块时同步更新考点子模块；v2.2.90 归一化旧名
       linked.point=point;
+      linked.question=question; // v2.3.14：问题字段
       linked.note=note;
       linked.date=rec.date||todayStr();
       linked.updatedAt=Date.now();
@@ -2124,6 +2145,7 @@ function syncRecordToMistakes(moduleKey, rec, oldSnap){
         hit.module=mod.key;
         hit.sub=normSub(rec.sub);
         hit.point=point;
+        hit.question=question; // v2.3.14：问题字段
         hit.note=note;
         hit.date=rec.date||todayStr();
         hit.recId=rec.id; // 补回关联，之后编辑直接走 ① 快路径
@@ -2134,11 +2156,14 @@ function syncRecordToMistakes(moduleKey, rec, oldSnap){
     // ③ 去重：同模块+同内容不重复（命中即补 recId，修复"关联建立不起来"的老问题）
     const exist=DB.mistakes.find(m=>m.module===mod.key && m.point===point);
     if(exist){
-      if(!exist.recId){ exist.recId=rec.id; exist.updatedAt=Date.now(); }
+      let dirty=false;
+      if(!exist.recId){ exist.recId=rec.id; dirty=true; }
+      if(exist.question===undefined){ exist.question=question; dirty=true; } // v2.3.14：补问题字段
+      if(dirty) exist.updatedAt=Date.now();
       return;
     }
     // ④ 确实没有原考点，才新建
-    DB.mistakes.push({id:uid(),module:mod.key,sub:normSub(rec.sub),point,note,date:rec.date||todayStr(),recId:rec.id,updatedAt:Date.now()});
+    DB.mistakes.push({id:uid(),module:mod.key,sub:normSub(rec.sub),point,question,note,date:rec.date||todayStr(),recId:rec.id,updatedAt:Date.now()});
   }catch(e){ console.warn('syncRecordToMistakes', e); }
 }
 /* 把错题的知识点自动同步到考点本（mistakes 数组）；带 recId 关联，编辑时更新而非新建 */
@@ -2605,7 +2630,7 @@ function viewErrorDetail(id){
       <span>${e.date}</span>
     </div>
     ${e.desc?`<div class="detail-block"><div class="detail-label">题目</div>${escapeHtml(e.desc)}</div>`:''}
-    ${e.answer?`<div class="detail-block"><div class="detail-label">答案</div>${escapeHtml(e.answer)}</div>`:''}
+    ${e.answer?`<details class="ans-fold"><summary>👁 答案（点击展开）</summary><div class="ans-body">${escapeHtml(e.answer)}</div></details>`:''}
     ${e.point?`<div class="detail-block"><div class="detail-label">知识点与思考</div>${escapeHtml(e.point)}</div>`:''}
     ${e.photos&&e.photos.length?`<div class="detail-block"><div class="detail-label">截图（${e.photos.length}张）</div><div class="photos" style="margin-top:8px;display:flex;flex-direction:column;gap:10px;">${e.photos.map(p=>`<img src="${b64Url(p)}" onerror="this.onerror=null;this.src='${p}'" onclick="previewImg(this.src)" style="width:100%;max-width:340px;max-height:80vh;object-fit:contain;border-radius:8px;border:1px solid var(--border);cursor:pointer;">`).join('')}</div></div>`:''}
     ${e.audio?`<div class="detail-block">${renderVoiceBar(e.audio, e.audioText, 'vd_'+e.id)}</div>`:''}
@@ -5671,7 +5696,8 @@ function mistakeModal(id){
       <div class="form-group" style="flex:1;"><label>所属模块</label><select id="mk_module" onchange="updateMkSubSelect()">${modOptions}</select></div>
       <div class="form-group" style="flex:1;"><label>子模块</label><select id="mk_sub"></select></div>
     </div>
-    <div class="form-group"><label>易错知识点</label><textarea id="mk_point" style="min-height:60px;" placeholder="如：增长率 vs 增长量（分子差一年，分母是基期）">${m?m.point||'':''}</textarea></div>
+    <div class="form-group"><label>❓ 问题</label><textarea id="mk_question" style="min-height:52px;" placeholder="本次做题暴露的问题（可留空）">${m?escapeHtml(m.question||''):''}</textarea></div>
+    <div class="form-group"><label>💡 改进方式</label><textarea id="mk_point" style="min-height:60px;" placeholder="如：增长率 vs 增长量（分子差一年，分母是基期）">${m?escapeHtml(m.point||''):''}</textarea></div>
     <div class="form-group"><label>备注（可选）</label><input id="mk_note" value="${m?m.note||'':''}" placeholder="如：2026省考真题第45题"></div>
     <div class="form-group"><label>📷 截图/图片（可选）</label>
       <input type="file" accept="image/*" multiple onchange="window._photoPending=onPhotoInput(this,_mistakePhotos);this.dataset.render='renderMistakePhotos'">
@@ -5714,25 +5740,27 @@ function saveMistake(id){
   const module=document.getElementById('mk_module').value;
   const sub=document.getElementById('mk_sub').value;
   const point=document.getElementById('mk_point').value.trim();
+  const qEl=document.getElementById('mk_question');
+  const question=qEl?qEl.value.trim():'';
   const note=document.getElementById('mk_note').value.trim();
-  if(!point){ toast('请填写易错知识点'); return; }
+  if(!point && !question){ toast('请填写问题或改进方式'); return; }
   if(!DB.mistakes) DB.mistakes=[];
   if(!DB.mistakeEbb) DB.mistakeEbb={};
-  saveMistakeAsync(id, module, sub, point, note);
+  saveMistakeAsync(id, module, sub, point, question, note);
 }
-async function saveMistakeAsync(id, module, sub, point, note){
+async function saveMistakeAsync(id, module, sub, point, question, note){
   // 等待图片读取完成（防止选图后立刻点保存导致图片丢失）
   if(window._photoPending){ try{ await window._photoPending; }catch(e){} window._photoPending=null; }
   // 大图上传 Supabase Storage（原图不压缩），失败保留 base64
   const photos = await ensurePhotosCloud(_mistakePhotos);
   if(id){
     const m=DB.mistakes.find(x=>x.id===id);
-    Object.assign(m,{module,sub,point,note,photos,updatedAt:Date.now()});
+    Object.assign(m,{module,sub,point,question,note,photos,updatedAt:Date.now()});
   }else{
-    const m={id:uid(),module,sub,point,note,photos,date:todayStr(),updatedAt:Date.now()};
+    const m={id:uid(),module,sub,point,question,note,photos,date:todayStr(),updatedAt:Date.now()};
     DB.mistakes.push(m);
-    // 手动添加 → 录入日=第1天，今天即可复习
-    DB.mistakeEbb[m.id]={stage:0, base:todayStr(), next:todayStr(), done:false};
+    // 手动添加 → 录入日=第1天，今天即可复习（_v72 免疫标记必带，见 errEbbInit/ebbInit 注释）
+    DB.mistakeEbb[m.id]={stage:0, base:todayStr(), next:todayStr(), done:false, _v72:1};
   }
   saveDB();
   // 编辑后返回详情弹窗（不退回主页）；新增则回考点本列表
@@ -7112,7 +7140,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.3.12';
+const APP_VERSION='v2.3.14';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
