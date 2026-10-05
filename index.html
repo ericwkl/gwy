@@ -433,8 +433,8 @@ function loadDB(){
       schedule:[],         // {id,time,endTime,content,note} 作息规划（时间段）
       weekTasks:[],        // {id,day(1-7),text,done} 每周计划
       mistakes:[],         // {id,module,point,note} 易错考点
-      errorEbb:{},         // 错题艾宾浩斯复习状态 {id:{stage,base,next,done}}
-      mistakeEbb:{},       // 易错考点艾宾浩斯复习状态
+      errorEbb:{},         // 错题复习状态 {id:{base,next,done,times}}；v2.3.12 起：每周一次，点已掌握即毕业
+      mistakeEbb:{},       // 易错考点艾宾浩斯复习状态（仍是 5 轮体系，勿与错题混用）
       kbCats:[...KB_CATS],
       settings:{lastPush:''},
       pushHistory:[],      // 推送历史
@@ -666,7 +666,7 @@ function renderHome(){
         <button class="btn btn-sm btn-ghost" onclick="errorListModal()">错题本</button>
         <button class="btn btn-sm btn-outline" onclick="errorModal()">+ 错题</button>
       </div></div>
-    <div style="font-size:11px;color:var(--text-light);margin:-4px 0 4px;">艾宾浩斯 · 录入当天=第1轮，之后第 2/4/7/15 天各复习一次（共5轮）；逾期未做则从补做当天顺延</div>
+    <div style="font-size:11px;color:var(--text-light);margin:-4px 0 4px;">录入当天进列表，之后<b>每周复习一次</b>；点「已掌握」即毕业（不再出现），没做对就保留、下周继续</div>
     ${renderTodayErrorEbb()}
   </div>`;
 
@@ -674,7 +674,7 @@ function renderHome(){
 }
 
 /* ============================================================
-   艾宾浩斯记忆复习：错题 + 易错考点
+   艾宾浩斯记忆复习：易错考点（错题已于 v2.3.12 改为「每周一次」，见下方 errEbb 段）
    规律：录入当天 = 第 1 天 = 第 1 轮（当天进待复习列表），
    之后复习间隔按轮次差分：第1轮后隔1天、第2轮后隔2天、
    第3轮后隔3天、第4轮后隔8天（对准时的人正好落在
@@ -732,15 +732,51 @@ function ebbFixOld(st){
   }
   return st;
 }
-function getErrorEbb(e){
-  if(!DB.errorEbb) DB.errorEbb={};
-  if(!DB.errorEbb[e.id]) DB.errorEbb[e.id]=ebbInit(e.date||todayStr());
-  return ebbFixOld(DB.errorEbb[e.id]);
-}
 function getMistakeEbb(m){
   if(!DB.mistakeEbb) DB.mistakeEbb={};
   if(!DB.mistakeEbb[m.id]) DB.mistakeEbb[m.id]=ebbInit(m.date||todayStr());
   return ebbFixOld(DB.mistakeEbb[m.id]);
+}
+/* ============================================================
+   v2.3.12：错题复习改为「每周一次 + 一次就毕业」，与考点的 5 轮体系彻底解耦。
+   规则（用户拍板）：
+     · 间隔固定 7 天，不再有第1/2/3/4/5轮的差分顺延
+     · 点「已掌握」→ 直接 done，永久毕业，不再出现
+     · 做不对点「待复习」→ 保留，下次仍是 7 天后（不加速、不惩罚）
+   注意：本节函数只服务错题（DB.errorEbb）。考点（DB.mistakeEbb）继续走上面的
+   ebbInit / ebbNextFromToday / ebbRoundText 5 轮体系，两者互不影响。
+   ============================================================ */
+const ERR_GAP=7; // 错题复习间隔（天）
+function errEbbInit(base){
+  // _v72 免疫标记必带：否则 v2.2.72 的 shiftStage 迁移每次加载都会把 stage 误减，
+  // 表现为「昨天点了已掌握，今天又变回待复习」。
+  return {base, next:base, done:false, times:0, _v72:1};
+}
+function errEbbNext(fromStr, gap){
+  const d=new Date((fromStr||todayStr())+'T00:00:00');
+  d.setDate(d.getDate()+(gap||ERR_GAP));
+  return localDateStr(d);
+}
+/* 错题状态：优先用新语义字段；旧 5 轮存量数据（有 stage、无 times）自动折算
+   —— 只要点过任何一轮「已掌握」或已 done，都视为毕业（用户拍板：存量全部视为已毕业）。 */
+function getErrorEbb(e){
+  if(!DB.errorEbb) DB.errorEbb={};
+  const st=DB.errorEbb[e.id];
+  if(!st){ DB.errorEbb[e.id]=errEbbInit(e.date||todayStr()); return DB.errorEbb[e.id]; }
+  if(st.times===undefined){
+    // 一次性折算旧 5 轮数据
+    st.times=(st.stage||0);
+    if(st.done){ st.done=true; st.next=''; }
+    else if((st.stage||0)>0){ st.done=true; st.next=''; } // 点过至少一轮 → 视为已掌握毕业
+    else{ st.next=st.next||st.base||todayStr(); }
+  }
+  if(st.done) st.next='';
+  return st;
+}
+/* 错题列表徽章：毕业显示 ✅ 已掌握；未毕业显示下次复习日期（MM-DD） */
+function errEbbLabel(st){
+  if(!st||st.done) return '✅ 已掌握';
+  return st.next?('复习 '+st.next.slice(5)):'待复习';
 }
 /* v2.2.91：统计一组考点的「已掌握 / 待复习」条数。
    口径（用户确认）：已掌握 = st.done===true；待复习 = 其余全部未掌握的（含未到期）。
@@ -766,7 +802,7 @@ function renderTodayErrorEbb(){
     const st=getErrorEbb(e);
     const mod=MODULES.find(m=>m.key===e.module);
     const badge=mod?mod.name+(normSub(e.sub)?'·'+normSub(e.sub):''):'未分类';
-    const round=ebbRoundText(st); // v2.2.74：录入当天 stage 0 = 第1轮
+    const round=errEbbLabel(st); // v2.3.12：错题改为每周一次，徽章显示下次复习日期
     return `<div style="display:flex;align-items:center;gap:6px;padding:8px 0;border-bottom:1px solid var(--border);">
       <span style="flex-shrink:0;font-size:10px;padding:1px 6px;border-radius:6px;background:var(--primary-soft);color:var(--primary);white-space:nowrap;">${badge}</span>
       <span style="flex-shrink:0;font-size:10px;color:var(--accent);background:var(--accent-soft);padding:0 6px;border-radius:6px;">${round}</span>
@@ -798,22 +834,16 @@ function ebbErrorAction(id, action){
   const e=DB.errors.find(x=>x.id===id); if(!e) return;
   const st=getErrorEbb(e);
   if(action==='master'){
+    // v2.3.12：一次就毕业。点「已掌握」= 彻底记住，永久移出待复习列表。
     delete st.pending;
-    st.stage++; // 完成当前轮；stage = 已完成轮数（第1轮=录入当天）
-    // v2.2.74：走完 5 轮（第1轮录入当天 + 第2/3/4/5轮在录入后第2/4/7/15天）彻底记住
-    if(st.stage>=5){ st.done=true; st.next=''; toast('🎉 5轮复习完成，彻底记住！'); }
-    else{
-      // v2.2.74：差分顺延模型。完成第 N 轮后，下一轮 = 今天 + 间隔[N]，间隔表 = EBB_ABS 相邻差分 [1,2,3,8]。
-      // 准点做：录入当天第1轮 → +1天第2轮 → +2天第3轮 → +3天第4轮 → +8天第5轮，恰好落在录入后第 1/2/4/7/15 天。
-      // 逾期做：从补做当天起顺延，不会同一天连补多轮（用户拍板"逾期后顺延"）。
-      st.next=ebbNextFromToday(st.stage);
-      toast('已掌握！第'+(st.stage+1)+'轮在 '+st.next.slice(5)+' 复习');
-    }
+    st.times=(st.times||0)+1;
+    st.done=true; st.next='';
+    toast('🎉 已掌握，本题毕业！');
   }else{
-    st.pending=true; // 标记用户主动推迟，避免旧数据修正逻辑干扰
-    const d=new Date(); d.setDate(d.getDate()+1);
-    st.next=localDateStr(d);
-    toast('已标记待复习，明天继续');
+    // v2.3.12：做不对 → 保留，下次仍是 7 天后（固定每周一次，不加速不惩罚）。
+    delete st.pending;
+    st.next=errEbbNext(todayStr(), ERR_GAP);
+    toast('已保留，下周 '+st.next.slice(5)+' 再复习');
   }
   saveDB(); renderHome();
 }
@@ -868,7 +898,7 @@ function showAllErrorEbb(){
     const badge=mod?mod.name+(normSub(e.sub)?'·'+normSub(e.sub):''):'未分类';
     return `<div style="display:flex;align-items:center;gap:6px;padding:8px 0;border-bottom:1px solid var(--border);">
       <span style="flex-shrink:0;font-size:10px;padding:1px 6px;border-radius:6px;background:var(--primary-soft);color:var(--primary);white-space:nowrap;">${badge}</span>
-      <span style="flex-shrink:0;font-size:10px;color:var(--accent);background:var(--accent-soft);padding:0 6px;border-radius:6px;">${ebbRoundText(st)}</span>
+      <span style="flex-shrink:0;font-size:10px;color:var(--accent);background:var(--accent-soft);padding:0 6px;border-radius:6px;">${errEbbLabel(st)}</span>
       <span style="flex:1;min-width:0;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;" onclick="viewErrorDetail('${e.id}')">${escapeHtml(e.desc||'无题目')}</span>
       <button class="btn btn-sm" style="padding:2px 8px;font-size:11px;background:var(--primary);color:#fff;flex-shrink:0;" onclick="ebbErrorAction('${e.id}','master')">已掌握</button>
       <button class="btn btn-sm btn-outline" style="padding:2px 8px;font-size:11px;flex-shrink:0;" onclick="ebbErrorAction('${e.id}','again')">待复习</button>
@@ -1572,7 +1602,7 @@ function errorItemHtml(e, tagPrefix){
   const mod=MODULES.find(m=>m.key===e.module);
   const badge=mod?mod.icon+' '+mod.name+(normSub(e.sub)?'·'+normSub(e.sub):''):'未分类';
   const st=getErrorEbb(e);
-  const round=st.done?'✅ 已掌握':ebbRoundText(st);
+  const round=errEbbLabel(st); // v2.3.12：错题改为每周一次，徽章显示下次复习日期
   return `<div class="error-item" style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:9px 10px;" onclick="viewErrorDetail('${e.id}')">
     <span class="r-tag" style="flex-shrink:0;margin:0;font-size:10px;white-space:nowrap;">${badge}</span>
     <span style="flex-shrink:0;font-size:10px;color:var(--accent);background:var(--accent-soft);padding:0 6px;border-radius:6px;white-space:nowrap;">${round}</span>
@@ -7082,7 +7112,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.3.11';
+const APP_VERSION='v2.3.12';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
@@ -7127,7 +7157,8 @@ function init(){
         st.next=localDateStr(nd);
       });
     };
-    fixEbb(DB.errorEbb); fixEbb(DB.mistakeEbb);
+    // v2.3.12：错题已脱离 5 轮体系（每周一次），不再走这套旧间隔重算；只修考点。
+    fixEbb(DB.mistakeEbb);
     DB._ebbIntervalV3=true;
     saveDB();
   }
@@ -7145,7 +7176,8 @@ function init(){
         st._v72=1;
       });
     };
-    shiftStage(DB.errorEbb); shiftStage(DB.mistakeEbb);
+    // v2.3.12：错题不再走旧 stage 语义迁移（新错题自带 _v72 免疫标记，无需 shiftStage）；只迁考点。
+    shiftStage(DB.mistakeEbb);
     if(_ebbShiftChanged) saveDB();
   }
   // v2.2.82：抢救被 shiftStage 误减的条目。ebbInit 旧版不带 _v72，v2.2.72 之后新录入的
@@ -7166,7 +7198,8 @@ function init(){
         }
       });
     };
-    rescueStage(DB.errorEbb); rescueStage(DB.mistakeEbb);
+    // v2.3.12：rescueStage 是给旧 5 轮 shiftStage 误减兜底的，错题已不走该体系，摘除以免给新错题乱设 stage；只救考点。
+    rescueStage(DB.mistakeEbb);
     if(_ebbRescueChanged) saveDB();
   }
   // v2.2.37：把"轮次已满但未标已掌握"的历史数据补齐（幂等，每台设备各自修本地，不依赖标记避免同步传播 race）。
@@ -7183,7 +7216,8 @@ function init(){
         if((st.stage||0)>=5){ st.done=true; st.next=''; delete st.pending; _ebbDone5Changed=true; }
       });
     };
-    fixDone5(DB.errorEbb); fixDone5(DB.mistakeEbb);
+    // v2.3.12：错题无 stage>=5 之说法（点已掌握即 done），无需补标；只修考点。
+    fixDone5(DB.mistakeEbb);
     if(_ebbDone5Changed) saveDB();
   }
   // v2.2.28 一次性补丁：给历史缺失录入日期的考点回填 date
@@ -7727,7 +7761,11 @@ function mergeLocalCloud(local, cloud){
   return merged;
 }
 
-/* 艾宾浩斯状态合并：每 id 取 stage 大者（掌握轮次多优先），同 stage 取 next 更晚（已排到更后复习）者 */
+/* 艾宾浩斯状态合并：每 id 取 stage 大者（掌握轮次多优先），同 stage 取 next 更晚（已排到更后复习）者
+   v2.3.12：错题改用新语义（无 stage，有 times/done）。这里做兼容——
+     ① done=true 的一侧直接胜出（毕业是终态，不可被未毕业覆盖）；
+     ② 都未毕业时，比 times（复习次数）大者优先，相同则取 next 更晚者；
+     ③ 旧 5 轮数据仍按 stage 比较。 */
 function mergeEbbMap(a, b){
   const out = {};
   const ids = new Set([...Object.keys(a||{}), ...Object.keys(b||{})]);
@@ -7735,10 +7773,16 @@ function mergeEbbMap(a, b){
     const x = (a||{})[id], y = (b||{})[id];
     if(!x){ out[id]=y; continue; }
     if(!y){ out[id]=x; continue; }
+    // 终态优先：任一侧已毕业，取已毕业那侧（含其清空的 next）
+    if(!!x.done !== !!y.done){ out[id] = y.done ? y : x; continue; }
     const sx = x.stage||0, sy = y.stage||0;
-    if(sy !== sx){ out[id] = sy > sx ? y : x; }
-    else if(!!y.done !== !!x.done){ out[id] = y.done ? y : x; }
-    else{ out[id] = String(y.next||'') >= String(x.next||'') ? y : x; }
+    if(sy !== sx){ out[id] = sy > sx ? y : x; continue; }
+    // 错题新语义：stage 都缺席(=0)，比 times
+    if(x.times!==undefined || y.times!==undefined){
+      const tx = x.times||0, ty = y.times||0;
+      if(tx !== ty){ out[id] = ty > tx ? y : x; continue; }
+    }
+    out[id] = String(y.next||'') >= String(x.next||'') ? y : x;
   }
   return out;
 }
