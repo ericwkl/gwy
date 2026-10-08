@@ -987,26 +987,81 @@ function setEbbMkSubFilter(k){
   ebbMkSubFilter=k;
   closeModal(); showAllMistakeEbb();
 }
+/* ============================================================
+   v2.3.16：知识点 / 错题 收藏（⭐）
+   - 存 m.star / e.star（true=已收藏，undefined/false=未收藏）
+   - 列表行右侧星标点击切换，不进详情
+   - 「⭐已收藏」筛选标签；收藏项在各自分组内置顶
+   ============================================================ */
+/* 星标按钮 HTML（kind: 'mk' | 'err'） */
+function starBtnHtml(kind, id, starred){
+  return `<span role="button" title="${starred?'取消收藏':'收藏'}" data-star="${kind}:${id}"
+    onclick="event.stopPropagation();toggleStar('${kind}','${id}')"
+    style="flex-shrink:0;font-size:14px;line-height:1;padding:2px 3px;cursor:pointer;user-select:none;${starred?'':'opacity:.28;'}">${starred?'⭐':'☆'}</span>`;
+}
+/* 切换收藏状态（不改 updatedAt 以外内容；存 DB 后仅重绘当前列表，避免弹窗重建失焦） */
+function toggleStar(kind, id){
+  const arr = kind==='mk' ? (DB.mistakes||[]) : (DB.errors||[]);
+  const it = arr.find(x=>x.id===id);
+  if(!it) return;
+  // 注意：取消收藏必须显式写 false，不能 delete 字段。
+  //   否则字段变 undefined，同步合并时 empty 判定为真 → 云端旧值 true 会被补回来（"取消又复活"）。
+  //   显式 false 在合并里不算空值，本地较新时能压住云端，取消操作才能正确跨设备传播。
+  it.star = !it.star;
+  it.updatedAt = Date.now(); // 收藏状态需跨设备同步，必须打时间戳
+  saveDB();
+  // 就地重绘：更新该行星标，不重建整个弹窗（保留滚动位置与输入焦点）
+  document.querySelectorAll(`[data-star="${kind}:${id}"]`).forEach(el=>{
+    el.textContent = it.star ? '⭐' : '☆';
+    el.title = it.star ? '取消收藏' : '收藏';
+    el.style.opacity = it.star ? '' : '.28';
+  });
+  // 重排（置顶）与筛选态需要整体重绘
+  const boxId = kind==='mk' ? 'mkFullList' : 'errFullList';
+  const box=document.getElementById(boxId);
+  if(box){
+    const sc=document.getElementById('modalBox');
+    const keep=sc?sc.scrollTop:0;
+    box.innerHTML = kind==='mk' ? renderFullMistakeList() : renderFullErrorList();
+    if(sc) sc.scrollTop=keep;
+  }
+  if(kind==='mk'){ refreshMkStatRow(); refreshMkCountHint(); }
+  toast(it.star ? '⭐ 已收藏' : '已取消收藏');
+}
+/* 收藏置顶排序辅助：a/b 同组比较时已收藏优先（返回 <0 表示 a 在前） */
+function starFirst(a, b){ return (b.star?1:0) - (a.star?1:0); }
 /* 考点本弹窗（全部考点，类似错题本，从主页「管理」进入） */
 let mkListFilter='';
 let mkListSubFilter=''; // v2.2.28 考点本子模块筛选（如 判断推理→图形推理）
+let mkListQuery=''; // v2.3.15 考点本搜索关键词（匹配全部字段，空格分隔=AND）
+let mkListStarOnly=false; // v2.3.16 考点本「只看已收藏」
 let _mkListScroll=0; // 考点本滚动位置记忆（详情返回时恢复）
 let _detailReturnFnMistake=null;
 function mistakeListModal(){
   _detailReturnFnMistake='mistakeListModal';
+  const starCount=(DB.mistakes||[]).filter(m=>m.star).length;
   const tags=[['','全部']].concat(MODULES.map(m=>[m.key,m.name]))
-    .map(([k,n])=>`<span class="tag ${mkListFilter===k?'on':''}" data-k="${k}" onclick="setMkListFilter('${k}')">${k?MODULES.find(m=>m.key===k).icon+' ':''}${n}</span>`).join('');
+    .map(([k,n])=>`<span class="tag ${mkListFilter===k?'on':''}" data-k="${k}" onclick="setMkListFilter('${k}')">${k?MODULES.find(m=>m.key===k).icon+' ':''}${n}</span>`).join('')
+    +`<span class="tag ${mkListStarOnly?'on':''}" data-star-tag="1" onclick="setMkListStarOnly(!mkListStarOnly)" style="white-space:nowrap;">⭐ 已收藏${starCount?' '+starCount:''}</span>`;
   const allStat=countMistakeStat(DB.mistakes||[]);
   openModal(`<div class="modal-head"><h3>📒 考点本（${allStat.total}条）</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
-    <div style="font-size:11px;color:var(--text-light);margin-bottom:6px;">点标签筛选模块/子模块 · 默认按模块→子模块排序 · 点考点查看详情</div>
+    <div style="font-size:11px;color:var(--text-light);margin-bottom:6px;">点标签筛选模块/子模块 · 默认按模块→子模块排序 · 点考点查看详情 · 点行尾 ☆ 收藏</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
       <span style="font-size:11px;color:var(--text-soft);">全部：</span>${mkStatBadges(allStat)}
     </div>
     <div id="mkStatRow"></div>
     <div class="tag-list" id="mkTagList">${tags}</div>${mkSubTagRow()}
+    <div style="display:flex;gap:6px;align-items:center;margin:8px 0 4px;">
+      <input id="mkSearch" type="search" placeholder="🔍 搜索考点（问题/改进方式/备注/子模块…）" value="${escapeHtml(mkListQuery)}"
+        oninput="setMkListQuery(this.value)"
+        style="flex:1;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);font-size:13px;box-sizing:border-box;">
+      <button class="btn btn-sm btn-ghost" onclick="clearMkListQuery()" id="mkSearchClear" style="flex-shrink:0;${mkListQuery?'':'display:none;'}">清空</button>
+    </div>
+    <div id="mkCountHint" style="font-size:11px;color:var(--text-light);margin-bottom:6px;"></div>
     <div id="mkFullList">${renderFullMistakeList()}</div>
     <div class="modal-foot"><button class="btn btn-outline" style="flex:1" onclick="syncAllErrorsToMistakesAndToast()">🔄 补同步未同步错题</button><button class="btn btn-outline" style="flex:1" onclick="closeModal()">关闭</button></div>`);
   refreshMkStatRow();
+  refreshMkCountHint(); // v2.3.15 恢复上次搜索的计数提示
   if(_mkListScroll>0){
     setTimeout(()=>{
       const box=document.getElementById('modalBox');
@@ -1014,11 +1069,21 @@ function mistakeListModal(){
     },60);
   }
 }
+/* v2.3.15：考点本搜索——关键词匹配「全部字段」（问题/改进方式/备注/子模块/模块名），
+   空格分隔多关键词 = AND（都要命中）。大小写不敏感。 */
+function mkMatchQuery(m, q){
+  if(!q) return true;
+  const mod=MODULES.find(x=>x.key===m.module||x.name===m.module);
+  const hay=[m.question,m.point,m.note,normSub(m.sub),m.sub,mod?mod.name:'',m.module,m.date]
+    .map(v=>String(v||'')).join('\n').toLowerCase();
+  return String(q).toLowerCase().split(/\s+/).filter(Boolean).every(w=>hay.indexOf(w)>=0);
+}
 /* v2.2.91：筛选后的统计汇总条。放在「全部」后方，随模块/子模块筛选实时更新 */
 function curMkFilteredList(){
   let list=[...(DB.mistakes||[])];
   if(mkListFilter) list=list.filter(m=>m.module===mkListFilter);
   if(mkListSubFilter) list=list.filter(m=>normSub(m.sub)===mkListSubFilter);
+  if(mkListQuery) list=list.filter(m=>mkMatchQuery(m, mkListQuery));
   return list;
 }
 function mkStatRowHtml(){
@@ -1049,6 +1114,7 @@ function setMkListFilter(k){
   const box=document.getElementById('mkFullList');
   if(box) box.innerHTML=renderFullMistakeList();
   refreshMkStatRow(); // v2.2.91 汇总条随筛选更新
+  refreshMkCountHint();
   document.querySelectorAll('#modalBox .tag').forEach(t=>{
     t.classList.toggle('on', t.getAttribute('data-k')===k);
   });
@@ -1061,22 +1127,63 @@ function setMkListFilter(k){
     }
   }
 }
-function setMkListSubFilter(k){
-  mkListSubFilter=k;
+/* v2.3.16：考点本「只看已收藏」切换 */
+function setMkListStarOnly(on){
+  mkListStarOnly=!!on;
   const box=document.getElementById('mkFullList');
   if(box) box.innerHTML=renderFullMistakeList();
+  refreshMkStatRow();
+  refreshMkCountHint();
+  document.querySelectorAll('#mkTagList .tag').forEach(t=>{
+    if(t.getAttribute('data-star-tag')) t.classList.toggle('on', mkListStarOnly);
+  });
+}
+function setMkListSubFilter(k){
+  mkListSubFilter=k;  const box=document.getElementById('mkFullList');
+  if(box) box.innerHTML=renderFullMistakeList();
   refreshMkStatRow(); // v2.2.91 汇总条随筛选更新
+  refreshMkCountHint();
   document.querySelectorAll('#mkSubTagRow .tag').forEach(t=>{
     t.classList.toggle('on', t.getAttribute('data-sub')===k);
   });
 }
+/* v2.3.15 考点本搜索：实时过滤（输入即生效，不重建整个弹窗以免输入框失焦） */
+function setMkListQuery(q){
+  mkListQuery=(q||'').trim();
+  const box=document.getElementById('mkFullList');
+  if(box) box.innerHTML=renderFullMistakeList();
+  const clr=document.getElementById('mkSearchClear');
+  if(clr) clr.style.display = mkListQuery ? '' : 'none';
+  refreshMkStatRow();
+  refreshMkCountHint();
+}
+function clearMkListQuery(){
+  const el=document.getElementById('mkSearch');
+  if(el) el.value='';
+  setMkListQuery('');
+  if(el) el.focus();
+}
+/* 搜索结果计数提示（仅搜索时显示） */
+function refreshMkCountHint(){
+  const el=document.getElementById('mkCountHint');
+  if(!el) return;
+  if(!mkListQuery){ el.textContent=''; return; }
+  const n=curMkFilteredList().length;
+  el.textContent=n?('找到 '+n+' 条匹配「'+mkListQuery+'」的考点'):('没有匹配「'+mkListQuery+'」的考点');
+}
 function renderFullMistakeList(){
   let list=[...(DB.mistakes||[])];
   if(!list.length) return '<div class="empty-state"><div class="emoji">📒</div><div class="txt">暂无考点</div></div>';
+  if(mkListStarOnly) list=list.filter(m=>m.star); // v2.3.16 只看已收藏
   if(mkListFilter) list=list.filter(m=>m.module===mkListFilter);
   if(mkListSubFilter) list=list.filter(m=>normSub(m.sub)===mkListSubFilter); // v2.2.90 归一化后再比
-  if(!list.length) return '<div class="empty-state"><div class="emoji">📒</div><div class="txt">该分类暂无考点</div></div>';
-  // 默认按模块顺序 → 子模块顺序排列（不再按时间平铺），组内时间倒序
+  if(mkListQuery) list=list.filter(m=>mkMatchQuery(m, mkListQuery)); // v2.3.15 搜索
+  if(!list.length) return mkListQuery
+    ? '<div class="empty-state"><div class="emoji">🔍</div><div class="txt">没有匹配「'+escapeHtml(mkListQuery)+'」的考点</div></div>'
+    : (mkListStarOnly
+      ? '<div class="empty-state"><div class="emoji">⭐</div><div class="txt">还没有收藏的考点（点列表行右侧 ☆ 即可收藏）</div></div>'
+      : '<div class="empty-state"><div class="emoji">📒</div><div class="txt">该分类暂无考点</div></div>');
+  // 默认按模块顺序 → 子模块顺序排列（不再按时间平铺），组内收藏优先 + 时间倒序
   const modOrder={}; MODULES.forEach((m,i)=>{ modOrder[m.key]=i; });
   list.sort((a,b)=>{
     const ma=modOrder[a.module]!==undefined?modOrder[a.module]:99;
@@ -1085,6 +1192,7 @@ function renderFullMistakeList(){
     // v2.2.90：子模块名归一化后再比顺序（旧名「逻辑推理」→「逻辑判断」）
     const sa=subRank(a.module,a.sub), sb=subRank(b.module,b.sub);
     if(sa!==sb) return sa-sb;
+    const st=starFirst(a,b); if(st) return st; // v2.3.16 收藏置顶
     return (b.date||'').localeCompare(a.date||'');
   });
   // 模块 → 子模块 二级分组（与错题本一致）
@@ -1141,6 +1249,7 @@ function mkItemHtml(m){
     <span style="flex-shrink:0;font-size:10px;color:var(--accent);background:var(--accent-soft);padding:0 6px;border-radius:6px;white-space:nowrap;">${round}</span>
     <span style="flex:1;min-width:0;font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(firstLine||'')}</span>
     <span class="r-time" style="flex-shrink:0;margin:0;font-size:10px;">${m.date||''}</span>
+    ${starBtnHtml('mk', m.id, !!m.star)}
     <span style="color:var(--text-light);font-size:11px;flex-shrink:0;">›</span>
   </div>`;
 }
@@ -1563,12 +1672,15 @@ function renderErrorList(limit){
 /* 完整错题本弹窗（查看全部错题，可按模块/子模块筛选） */
 let errFilter='';
 let errSubFilter=''; // v2.2.28 错题本子模块筛选
+let errStarOnly=false; // v2.3.16 错题本「只看已收藏」
 function errorListModal(){
   _detailReturnFn='errorListModal'; // 标记：从错题本进入详情，返回时回到错题本
+  const errStarCount=(DB.errors||[]).filter(e=>e.star).length;
   const tags=[['','全部']].concat(MODULES.map(m=>[m.key,m.name]))
-    .map(([k,n])=>`<span class="tag ${errFilter===k?'on':''}" data-k="${k}" onclick="setErrFilter('${k}')">${k?MODULES.find(m=>m.key===k).icon+' ':''}${n}</span>`).join('');
+    .map(([k,n])=>`<span class="tag ${errFilter===k?'on':''}" data-k="${k}" onclick="setErrFilter('${k}')">${k?MODULES.find(m=>m.key===k).icon+' ':''}${n}</span>`).join('')
+    +`<span class="tag ${errStarOnly?'on':''}" data-star-tag="1" onclick="setErrStarOnly(!errStarOnly)" style="white-space:nowrap;">⭐ 已收藏${errStarCount?' '+errStarCount:''}</span>`;
   openModal(`<div class="modal-head"><h3>📚 错题本（${DB.errors.length}条）</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
-    <div style="font-size:11px;color:var(--text-light);margin-bottom:6px;">点标签筛选模块/子模块 · 默认按模块→子模块分组显示</div>
+    <div style="font-size:11px;color:var(--text-light);margin-bottom:6px;">点标签筛选模块/子模块 · 默认按模块→子模块分组显示 · 点行尾 ☆ 收藏</div>
     <div class="tag-list" id="errTagList">${tags}</div>${errSubTagRow()}
     <div id="errFullList">${renderFullErrorList()}</div>`);
   // 从详情返回时恢复之前的滚动位置（保持打开题目前的位置）
@@ -1589,6 +1701,15 @@ function errSubTagRow(){
     `</div>`;
 }
 let _errListScroll=0; // 错题本滚动位置记忆（详情返回时恢复）
+/* v2.3.16：错题本「只看已收藏」切换 */
+function setErrStarOnly(on){
+  errStarOnly=!!on;
+  const box=document.getElementById('errFullList');
+  if(box) box.innerHTML=renderFullErrorList();
+  document.querySelectorAll('#errTagList .tag').forEach(t=>{
+    if(t.getAttribute('data-star-tag')) t.classList.toggle('on', errStarOnly);
+  });
+}
 function setErrFilter(k){
   errFilter=k;
   errSubFilter=''; // 切换模块时重置子模块筛选
@@ -1626,12 +1747,20 @@ function errorItemHtml(e, tagPrefix){
     <span style="flex-shrink:0;font-size:10px;color:var(--accent);background:var(--accent-soft);padding:0 6px;border-radius:6px;white-space:nowrap;">${round}</span>
     <span style="flex:1;min-width:0;font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(e.desc||'无题目')}</span>
     <span class="r-time" style="flex-shrink:0;margin:0;font-size:10px;">${e.date}</span>
+    ${starBtnHtml('err', e.id, !!e.star)}
     <span style="color:var(--text-light);font-size:11px;flex-shrink:0;">›</span>
   </div>`;
 }
 function renderFullErrorList(){
-  let list=[...DB.errors].sort((a,b)=>b.date.localeCompare(a.date));
+  let list=[...DB.errors].sort((a,b)=>{
+    const st=starFirst(a,b); if(st) return st; // v2.3.16 收藏置顶
+    return b.date.localeCompare(a.date);
+  });
   if(!list.length) return '<div class="empty-state"><div class="emoji">📚</div><div class="txt">暂无错题</div></div>';
+  if(errStarOnly){ // v2.3.16 只看已收藏
+    list=list.filter(e=>e.star);
+    if(!list.length) return '<div class="empty-state"><div class="emoji">⭐</div><div class="txt">还没有收藏的错题（点列表行右侧 ☆ 即可收藏）</div></div>';
+  }
   if(errFilter){
     list=list.filter(e=>e.module===errFilter);
     if(errSubFilter) list=list.filter(e=>e.sub===errSubFilter); // v2.2.28 子模块筛选
@@ -1666,7 +1795,10 @@ function renderSubGrouped(items){
     return (ia<0?99:ia)-(ib<0?99:ib);
   });
   return subKeys.map(s=>{
-    const sItems=bySub[s];
+    const sItems=bySub[s].sort((a,b)=>{
+      const st=starFirst(a,b); if(st) return st; // v2.3.16 组内收藏置顶
+      return String(b.date||'').localeCompare(String(a.date||''));
+    });
     const header=s?`<div style="display:flex;align-items:center;gap:6px;margin:8px 0 4px 4px;">
       <span style="font-size:12px;font-weight:600;color:var(--accent);">▸ ${s}</span>
       <span style="font-size:10px;background:var(--accent-soft);color:var(--accent);border-radius:8px;padding:0 6px;">${sItems.length}条</span>
@@ -7140,7 +7272,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.3.14';
+const APP_VERSION='v2.3.16';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
