@@ -4831,7 +4831,9 @@ async function renderAccu(){
   const seed=getAccuSeed();
   // v2.2.57：缓存带版本号——解析/渲染逻辑升级时手动+1，强制旧版本渲染的缓存 HTML 失效，
   // 防止跨版本复用旧缓存（如 v2.2.55 渲染的【莫此】拆词 HTML 在 v2.2.56 下继续命中）
-  const ACCU_CACHE_VER=13;  // v2.3.7：政治理论/常识解析器支持 markdown `#` 标题（唯物论/辩证法/认识论
+  const ACCU_CACHE_VER=14;  // v2.3.17：常识解析器改为「大类为轮转单位 + 法律按小标题拆 + 广东省情屏蔽」，
+                            // 抽取条数按话题大小浮动 → 解析/渲染结构均变，旧缓存 HTML 必须失效。
+                            // v2.3.7：政治理论/常识解析器支持 markdown `#` 标题（唯物论/辩证法/认识论
                             // 独立成话题），解析逻辑升级 → 旧缓存 HTML 必须失效。**上次踩坑**：v2.3.6
                             // 改了第 4913 行解析规则却忘了升这个常量，导致用户端命中当天早先渲染的缓存
                             // （ver=12 命中 → 直接复用旧 HTML），页面版本号已是 v2.3.6 但内容看着没变化。
@@ -5092,6 +5094,24 @@ async function renderAccu(){
       const topics=[];
       let curTopic=null, curItems=[], curItem=null;
       let curIndent=-1;   // v2.2.97：当前条目的缩进深度，用于判「子项 / 同级新条目」
+      // v2.3.17：记录当前一级大类名（`# 一、经济常识` / `# 二、法律常识` …）。
+      // 背景（用户反馈「为什么我感觉常识有的内容根本没轮换到」）：
+      //   原解析器把带 `#` 的一级标题在 v2.3.6 分支里剥成裸话题名，而
+      //   `# 二、法律常识`、`# 八、广东省情` 下面紧跟的是 `## （X）子节`、
+      //   自身没有 direct 条目 → 大类名被**整段丢弃**，子节全部平级成独立话题。
+      //   实测用户线上常识：20 个话题里「广东省情」散成 8 个（占 40%）、
+      //   「法律常识」散成 6 个（占 30%），而内容最多的「经济常识」19 条只占 1 个名额，
+      //   20 天才轮一次、一次只抽 5 条 → 80 天才转完一遍，观感即"有的内容根本没轮换到"。
+      // 规则（用户指定）：大类 = 轮转单位；仅「法律常识」按 `##` 小标题再拆；「广东省情」屏蔽。
+      // ⚠️ 仅对【常识卡】生效。政治理论卡共用这段解析器，必须保持原行为
+      //    （每个 `##`/`###` 都独立成话题，如 `### 唯物论`/`### 辩证法`/`### 认识论`），
+      //    否则「二、马克思主义」下的 5 个子话题会被压成 1 个重名话题 → 内容大量丢失。
+      const IS_CS = (cat.display==='常识');
+      let curL1='';
+      const CN_NUM='一二三四五六七八九十';
+      // v2.3.17：需按键分拆小标题的大类（仅法律常识）；整块屏蔽的大类（广东省情）
+      const SPLIT_L1=/法律常识/;
+      const SKIP_L1=/广东省情/;
       items.forEach(k=>{
         // v2.2.97：保留行首缩进 —— 飞书 blocks 重建后，缩进深度 = 树深，
         // 是判断「子项归属」的可靠信号（比文本模式猜测准确）。
@@ -5103,11 +5123,32 @@ async function renderAccu(){
           if(!stripped) continue;
           const indent=raw.length - raw.replace(/^[\s▼▷▶#*]+/,'').length;
           const line=stripped;
-          // 一级标题：一、经济常识
-          if(/^[一二三四五六七八九十]+[、，]/.test(line)){
+          /* v2.3.17：一级大类标题（`# 一、经济常识` / `一、经济常识` / `## （一）宪法` 之外的顶层）。
+             必须排在 markdown 分支之前判定，否则 `# 二、法律常识` 会被 v2.3.6 分支
+             剥成「法律常识」当话题、而它下面是 `##` 子节 → 大类名丢失（见上方 curL1 注释）。
+             判定：剥掉 `#`/空格后，以「中文序号 + 、/，」开头，且为 markdown 一级（单个 #）或无 # 顶层行。
+             只认 `#` 一级（lvl===1）与无 `#` 的中文序号行；`## （一）` 交给下面的二级分支。 */
+          const hLvl=(raw.trim().match(/^(#{1,6})\s+/)||[])[1];
+          const hLvlDepth=hLvl?hLvl.length:0;
+          if(/^[一二三四五六七八九十]+[、，]/.test(line) && (hLvlDepth===0||hLvlDepth===1)){
             if(curItem){ curItems.push(curItem); curItem=null; }
             if(curTopic&&curItems.length) topics.push({topic:curTopic, items:curItems});
-            curTopic=line; curItems=[]; curIndent=-1;
+            // ⚠️ 非常识卡（政治理论等）：退化为 v2.3.16 原行为——`# 一、做题方法` 直接
+            //    作为话题名（保留「一、」前缀），不做大类归并、不设 curL1。
+            //    否则它会掉进下面的 markdown 分支被当作普通 `##` 标题，
+            //    且因 `curItems.length===0` 时 push 被跳过而**整块丢失**
+            //    （实测政治理论「一、做题方法」2 条会被吃掉）。
+            if(!IS_CS){
+              curTopic=line; curItems=[]; curIndent=-1;
+              continue;
+            }
+            curL1=line;                       // v2.3.17：记住大类名
+            curTopic=null; curItems=[]; curIndent=-1;
+            // 广东省情：整块屏蔽（用户指定「先屏蔽」）——不建话题、后续条目全丢弃
+            if(SKIP_L1.test(line)) { continue; }
+            // 法律常识：不自己成话题，等下面的 `## （X）` 小标题
+            if(SPLIT_L1.test(line)) { continue; }
+            curTopic=line;                    // 其他大类：整块作为一个话题
             continue;
           }
           /* v2.3.6：markdown 标题（## / ### 等）统一作为话题分隔。
@@ -5128,18 +5169,36 @@ async function renderAccu(){
             if(hNum) h=hNum[1].trim();
             h=h.replace(/^[一二三四五六七八九十]+[、，]\s*/,'').trim();
             if(h){
+              if(IS_CS && SKIP_L1.test(curL1||'')) continue;   // v2.3.17：广东省情整块屏蔽
               if(curItem){ curItems.push(curItem); curItem=null; }
               if(curTopic&&curItems.length) topics.push({topic:curTopic, items:curItems});
-              curTopic=h; curItems=[]; curIndent=-1;
+              // v2.3.17：常识卡 —— 法律常识按 `##` 小标题拆话题（标题带大类前缀便于辨认）；
+              //   其他大类下若出现更深标题，仍并入当前大类、不另起话题。
+              // 非常识卡（政治理论等）—— 保持 v2.3.6 原行为：每个标题独立成话题。
+              if(IS_CS){
+                if(SPLIT_L1.test(curL1||'')) curTopic=curL1+' · '+h;
+                else curTopic=curL1||h;
+              } else {
+                curTopic=h;
+              }
+              curItems=[]; curIndent=-1;
               continue;
             }
           }
           // 二级标题：（一）宪法
           const m2=line.match(/^[（(][一二三四五六七八九十\d]+[）)]\s*(.+)$/);
           if(m2){
+            if(IS_CS && SKIP_L1.test(curL1||'')) continue;   // v2.3.17：广东省情整块屏蔽
             if(curItem){ curItems.push(curItem); curItem=null; }
             if(curTopic&&curItems.length) topics.push({topic:curTopic, items:curItems});
-            curTopic=m2[1].trim(); curItems=[]; curIndent=-1;
+            // v2.3.17：日常识拆小标题，非常识卡保持原行为
+            if(IS_CS){
+              if(SPLIT_L1.test(curL1||'')) curTopic=curL1+' · （'+m2[1].trim()+'）';
+              else curTopic=curL1||m2[1].trim();
+            } else {
+              curTopic=m2[1].trim();
+            }
+            curItems=[]; curIndent=-1;
             continue;
           }
           // v2.2.97：★ 缩进判定优先于编号判定（仅当本行带缩进）★
@@ -5194,9 +5253,10 @@ async function renderAccu(){
       });
       // 收尾
       if(curItem){ curItems.push(curItem); }
-      if(curTopic&&curItems.length) topics.push({topic:curTopic, items:curItems});
+      // v2.3.17：屏蔽的大类（广东省情）不产出话题——其残留条目直接丢弃。
+      if(curTopic&&curItems.length && !(IS_CS && SKIP_L1.test(curL1||''))) topics.push({topic:curTopic, items:curItems});
       // 无话题标题时也保留
-      if(!curTopic && curItems.length) topics.push({topic:'知识点', items:curItems});
+      if(!curTopic && curItems.length && !(IS_CS && SKIP_L1.test(curL1||''))) topics.push({topic:'知识点', items:curItems});
 
       if(topics.length){
         // v2.3.7：候选池门槛由「≥5 条」下调为「≥2 条」。
@@ -5214,7 +5274,14 @@ async function renderAccu(){
         // v2.2.83：索引位置也并入卡种子——只改打乱顺序不改位置时，池子小容易抽回同一条
         const tzIdx=((dayIndexOfToday()+(DB.accuSeedCount||0)+accuCardSeed(cat.display)*7)%tzOrder.length+tzOrder.length)%tzOrder.length;
         const t=tzOrder[tzIdx];
-        const picked=dailyPick(t.items, (hashStr(t.topic)||20260802)+accuCardSeed(cat.display), 5);
+        /* v2.3.17：抽取条数按话题大小浮动，替代固定 5 条。
+           背景：「一、经济常识」19 条，固定抽 5 条时需 4 轮（约 48 天）才转完一遍，
+           实测 365 天模拟下该话题内有条目一年曝光不足 5 次、甚至 0 次，
+           用户观感即"有的内容根本没轮换到"。
+           规则：条数 ≤6 全展示；>6 时按 ceil(n/3) 抽（19→7、13→5、12→4），
+           保证一个话题在 3 轮内能把全部条目露一遍（≈ 3×轮转周期）。 */
+        const pickN = t.items.length<=6 ? t.items.length : Math.ceil(t.items.length/3);
+        const picked=dailyPick(t.items, (hashStr(t.topic)||20260802)+accuCardSeed(cat.display), pickN);
         cards+=`<div class="card">
           <div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span style="display:flex;align-items:center;gap:6px;"><span class="section-tag">${escapeHtml(t.topic)}</span>${accuCardRefreshBtn(cat.display)}</span></div>
           ${picked.map(p=>isBoldTitle(p)
@@ -7272,7 +7339,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.3.16';
+const APP_VERSION='v2.3.17';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
