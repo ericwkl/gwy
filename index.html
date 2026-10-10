@@ -443,7 +443,7 @@ function loadDB(){
       errorEbb:{},         // 错题复习状态 {id:{base,next,done,times}}；v2.3.12 起：每周一次，点已掌握即毕业
       mistakeEbb:{},       // 易错考点艾宾浩斯复习状态（仍是 5 轮体系，勿与错题混用）
       kbCats:[...KB_CATS],
-      settings:{lastPush:''},
+      settings:{lastPush:'',pushMarks:{}},
       pushHistory:[],      // 推送历史
       studyProgress:[],    // 刷题进度 {id,module,sub,book,status,note,date}
       deletedIds:{},       // 墓碑：各模块已删除记录的 id（{mistakes:[id], errors:[id], ...}），同步时云端/本地都剔除，防止"删了又被同步回来"（v2.1.80）
@@ -4831,7 +4831,11 @@ async function renderAccu(){
   const seed=getAccuSeed();
   // v2.2.57：缓存带版本号——解析/渲染逻辑升级时手动+1，强制旧版本渲染的缓存 HTML 失效，
   // 防止跨版本复用旧缓存（如 v2.2.55 渲染的【莫此】拆词 HTML 在 v2.2.56 下继续命中）
-  const ACCU_CACHE_VER=14;  // v2.3.17：常识解析器改为「大类为轮转单位 + 法律按小标题拆 + 广东省情屏蔽」，
+  const ACCU_CACHE_VER=16;  // v2.3.20：申论小题解析器兼容"飞书导出 Markdown"（剥 `#` 标题 / 剥行首
+                            // 有序编号 1.~122.）→ 解析结果变（旧缓存里带着一百多的编号），必须失效。
+                            // v2.3.18：常识卡改为「轮到的那个话题全量展示」（去掉话题内抽稀），
+                            // 卡片内容变多 → 旧缓存必须失效。
+                            // v2.3.17：常识解析器改为「大类为轮转单位 + 法律按小标题拆 + 广东省情屏蔽」，
                             // 抽取条数按话题大小浮动 → 解析/渲染结构均变，旧缓存 HTML 必须失效。
                             // v2.3.7：政治理论/常识解析器支持 markdown `#` 标题（唯物论/辩证法/认识论
                             // 独立成话题），解析逻辑升级 → 旧缓存 HTML 必须失效。**上次踩坑**：v2.3.6
@@ -5274,14 +5278,14 @@ async function renderAccu(){
         // v2.2.83：索引位置也并入卡种子——只改打乱顺序不改位置时，池子小容易抽回同一条
         const tzIdx=((dayIndexOfToday()+(DB.accuSeedCount||0)+accuCardSeed(cat.display)*7)%tzOrder.length+tzOrder.length)%tzOrder.length;
         const t=tzOrder[tzIdx];
-        /* v2.3.17：抽取条数按话题大小浮动，替代固定 5 条。
-           背景：「一、经济常识」19 条，固定抽 5 条时需 4 轮（约 48 天）才转完一遍，
-           实测 365 天模拟下该话题内有条目一年曝光不足 5 次、甚至 0 次，
-           用户观感即"有的内容根本没轮换到"。
-           规则：条数 ≤6 全展示；>6 时按 ceil(n/3) 抽（19→7、13→5、12→4），
-           保证一个话题在 3 轮内能把全部条目露一遍（≈ 3×轮转周期）。 */
-        const pickN = t.items.length<=6 ? t.items.length : Math.ceil(t.items.length/3);
-        const picked=dailyPick(t.items, (hashStr(t.topic)||20260802)+accuCardSeed(cat.display), pickN);
+        /* v2.3.18：轮到的这个话题**全量展示**，不再抽稀。
+           背景（用户反馈「常识还是显示不全啊，人文常识就几条」→「我是说每天显示一个话题的全部内容」）：
+             「每天轮 1 个话题」这个骨架是对的（v2.2.43 起），问题出在**话题内部又抽了一刀**——
+             原实现按固定 5 条 / v2.3.17 按 ceil(n/3) 抽，导致「三、人文常识」20 条只露 7 条，
+             用户观感即"就几条"。
+           现改为：轮到哪个话题就把该话题的条目**全部展示**，不做任何随机抽取。
+           话题轮转周期 = 池子大小（常识 12 天一轮），每天一个话题讲透。 */
+        const picked=t.items;
         cards+=`<div class="card">
           <div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span style="display:flex;align-items:center;gap:6px;"><span class="section-tag">${escapeHtml(t.topic)}</span>${accuCardRefreshBtn(cat.display)}</span></div>
           ${picked.map(p=>isBoldTitle(p)
@@ -6349,10 +6353,20 @@ function addPush(type,title,content,fetchInfo){
   // 同类型同日期的旧推送只保留最新一条（避免"重新生成"时旧版内容堆积）
   // v2.1.99 修复：toLocaleString('zh-CN') 生成"2026/8/10"（无零填充），
   // 之前用 today.replace(/-/g,'/')="2026/08/10" 做 includes 匹配失败，旧推送没被清除
+  // v2.3.19：改用「type + 标题里的日期」判定，比 ts 区间更稳（不受时区/跨天边界影响）。
+  //   背景：pushHistory 在 mergeLocalCloud 里是**并集**合并（约 7953 行），
+  //   多设备各自生成的一条会被并集进来 → 同一天出现多条。这里按 type+day 严格去重。
   if(type){
     const dayStart=new Date(today+'T00:00:00').getTime();
     const dayEnd=dayStart+86400000;
-    DB.pushHistory=DB.pushHistory.filter(p=>!(p.type===type && p.ts>=dayStart && p.ts<dayEnd));
+    DB.pushHistory=DB.pushHistory.filter(p=>{
+      if(p.type!==type) return true;
+      // 优先用标题里的日期（形如 "每日学习推送 2026-10-09"）
+      const dm=(p.title||'').match(/(\d{4}-\d{2}-\d{2})/);
+      if(dm) return dm[1]!==today;
+      // 回退到 ts 区间
+      return !(p.ts>=dayStart && p.ts<dayEnd);
+    });
   }
   DB.pushHistory.push({id:uid(),type,title,content,time:new Date().toLocaleString('zh-CN'),ts:Date.now(),fetchInfo:fetchInfo||''});
   if(DB.pushHistory.length>100) DB.pushHistory=DB.pushHistory.slice(-100);
@@ -6360,12 +6374,18 @@ function addPush(type,title,content,fetchInfo){
 }
 /* 强制重新抓取：清除今天的推送标记和历史 + 重新生成早间和晚间推送 */
 async function forceRefreshPush(){
-  // 清除今天的推送标记，允许重新生成
+  // v2.3.19：清除今天的推送标记（pushMarks + 兼容旧 lastPush），允许重新生成
   const today=todayStr();
+  if(!DB.settings) DB.settings={};
+  if(DB.settings.pushMarks && typeof DB.settings.pushMarks==='object'){
+    for(const k of Object.keys(DB.settings.pushMarks)){
+      if(k.startsWith(today+'_')) delete DB.settings.pushMarks[k];
+    }
+  }
   if(DB.settings.lastPush){
     DB.settings.lastPush=DB.settings.lastPush.split(',').filter(p=>!p.startsWith(today+'_')).join(',');
-    saveDB();
   }
+  saveDB();
   // 清除今天的推送历史（避免新旧内容堆积）
   DB.pushHistory=(DB.pushHistory||[]).filter(p=>{
     const d=(p.time||'').match(/(\d{4})\/(\d+)\/(\d+)/);
@@ -6724,10 +6744,28 @@ function parseXiaoTi(records){
   // v2.2.70：新条目前缀子话题标签；老文档没有（1）层级时 curSub 恒为空，行为与旧版完全一致
   const pushItem=(arr,txt)=>{ arr.push(curSub?curSub+SEP+txt:txt); };
   records.forEach(k=>{
-    const lines=(k.content||'').split(/\n+/).map(s=>s.trim().replace(/^[▼▷▶\s#*]+/,'').replace(/[*#]+$/,'')).filter(Boolean);
-    for(const line of lines){
+    const lines=(k.content||'').split(/\n+/).map(s=>s.trim()).filter(Boolean);
+    for(const rawLine of lines){
+      /* v2.3.20：兼容"飞书导出 Markdown"格式。
+         起因：用户改用飞书导出 Markdown 重新导入申论小题，飞书会把有序列表写成
+         "1. xxx"、标题写成 "# 一、规范表达"/"## （一）话题"，全文编号从 1 连续排到 122。
+         旧版这里只剥 ▼▷▶/#* 前缀且不认数字编号，导致 "121. 设备管理不到位" 落进
+         "内容行" 分支原样存下 → 卡片显示出一百多的编号。
+         处理次序（关键）：先剥 markdown 标题的 # / 去尾 * → 再剥行首有序列表编号 → 再剥装饰符号。
+         ① 剥标题 #：`# 一、` / `## （一）` → 让后面的一级/二级正则能命中；
+         ② 剥编号：正文条目 "121. xxx" 的编号是**同级条目分隔符**（不是标题），
+            剥掉后该行就是一条普通内容行，行为与旧数据一致；
+            只在"不是 XX类话题 行"时剥，且编号后必须紧跟空格/正文，
+            避免误伤 "1." 这类的纯编号行或 "3.15" 这类数值开头。
+         ③ 剥装饰：▼▷▶ 及残留的 * # 符号。 */
+      const line=rawLine
+        .replace(/^\s*#{1,6}\s+/,'')                 // ① markdown 标题 # ## ###
+        .replace(/\s*[*#]+$/,'')                     // 尾部残留 * #
+        .replace(/^[▼▷▶\s]+/,'')                     // ③ 装饰符号
+        .replace(/^\s*\d+[.、]\s+(?=\S)/,'');        // ② 行首有序列表编号（后面必须有空格+正文）
+      if(!line) continue;
       // 一级标题：一、二、三、
-      const m1=line.match(/^[一二三四五六七八九十]+、(.+)$/);
+      const m1=line.match(/^[一二三四五六七八九十]+[、，.](.+)$/);
       if(m1){ curCat=m1[1].trim(); curTopic=''; curSub=''; inSectionBlock=false; continue; }
       // v2.2.70：三级子话题（1）（2）—— 必须早于二级判断，否则会被下面的 m2 当成话题名把大话题覆盖掉。
       // 只记录为标签，不改变 curTopic，这样分类键仍是大话题（如"乡村振兴类话题"）。
@@ -7209,10 +7247,14 @@ async function refreshLiveNews(){
   try{ await renderAccu(); toast('已更新'); }catch(e){}
 }
 
-async function generateMorningPush(){
+async function generateMorningPush(opts){
   try{
     // v2.2.38：生成前先拉一次云端数据，确保多设备数据完整
-    try{ await syncPullAndMerge(); }catch(e){ console.warn('[morning push] pull pre err', e); }
+    // v2.3.19：加 skipPull 选项。checkScheduledPush 已先 pull 过（为了在写标记前拿到
+    //   最新的 pushMarks），此处再 pull 一次纯属浪费且会拖慢生成；手动调用（无 opts）保持原行为。
+    if(!(opts && opts.skipPull)){
+      try{ await syncPullAndMerge(); }catch(e){ console.warn('[morning push] pull pre err', e); }
+    }
     const today=todayStr();
     let content='';
     // ① 薄弱模块提醒（易错考点/错题复习已移到主页"待复习"区，推送不再重复列出）
@@ -7256,9 +7298,12 @@ function getModuleTips(key){
   };
   return tips[key]||'';
 }
-async function generateNightPush(){
+async function generateNightPush(opts){
   // v2.2.38：生成前先拉取一次云端数据，避免另一台设备录入的刷题记录未同步而漏算（如 8-20 录 70 题、晚 22 点时设备仅同步到 20 题）
-  try{ await syncPullAndMerge(); }catch(e){ console.warn('[night push] pull pre err', e); }
+  // v2.3.19：加 skipPull 选项（同 generateMorningPush，避免 checkScheduledPush 重复 pull）
+  if(!(opts && opts.skipPull)){
+    try{ await syncPullAndMerge(); }catch(e){ console.warn('[night push] pull pre err', e); }
+  }
   const today=todayStr();
   const todayRecords=DB.records.filter(r=>r.date===today);
   const total=todayRecords.reduce((s,r)=>s+r.total,0);
@@ -7275,20 +7320,86 @@ async function generateNightPush(){
 }
 
 /* ============================================================
+   推送去重标记（v2.3.19 重做）
+   背景（用户反馈「早间推送显示好几条，晚间推送直接不显示」）：
+     原实现用 `DB.settings.lastPush` 一个**逗号串**记录"哪天推过什么"，
+     判断靠 `lastPush.includes('2026-10-09_morning')`。两个致命问题：
+     ① **多设备互相覆盖**：lastPush 是标量字符串，mergeLocalCloud（约 7964 行）
+        按「本地优先」合并标量 → 平板本地旧值覆盖手机已推的新值 → 标记丢失
+        → 同一天反复生成（实测 10-02 刷出 7 条早间推送）。
+     ② **只加不减**：串永久增长（实测已 64 项 / 700+ 字符），跟着云同步每次传输。
+   新方案：`DB.settings.pushMarks` = 对象 `{'2026-10-09_morning': 时间戳}`。
+     ① **并集合并**（见 mergeLocalCloud 的 pushMarks 分支）→ 多设备不会互相覆盖；
+     ② **7 天自动清理** → 不增长。
+   兼容：首次调用时把旧的 `lastPush` 串迁移进 pushMarks，读时两者取并集。
+   ============================================================ */
+const PUSH_MARK_KEEP_DAYS = 7;
+function pushMarkKey(day, kind){ return day+'_'+kind; }
+function pushMarkDaysAgoKey(n){
+  const d=new Date(); d.setDate(d.getDate()-n);
+  return localDateStr(d);
+}
+/* 清理超过 7 天的标记（对象键前缀日期比较） */
+function prunePushMarks(){
+  if(!DB.settings) DB.settings={};
+  if(!DB.settings.pushMarks || typeof DB.settings.pushMarks!=='object') DB.settings.pushMarks={};
+  const cutoff=pushMarkDaysAgoKey(PUSH_MARK_KEEP_DAYS);
+  const m=DB.settings.pushMarks;
+  for(const k of Object.keys(m)){
+    const day=k.slice(0,10);
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(day) || day<cutoff) delete m[k];
+  }
+}
+/* 是否已推过（当天 + 类型）。同时兼容旧 lastPush 串，保证升级后当天不重复推 */
+function hasPushMark(day, kind){
+  const key=pushMarkKey(day,kind);
+  if(DB.settings && DB.settings.pushMarks && DB.settings.pushMarks[key]) return true;
+  const old=(DB.settings&&DB.settings.lastPush)||'';
+  return old.split(',').indexOf(key)>=0;
+}
+/* 写入标记（在 syncPullAndMerge 之后调用，避免被云端旧值覆盖） */
+function setPushMark(day, kind){
+  if(!DB.settings) DB.settings={};
+  if(!DB.settings.pushMarks || typeof DB.settings.pushMarks!=='object') DB.settings.pushMarks={};
+  DB.settings.pushMarks[pushMarkKey(day,kind)]=Date.now();
+  // 迁移旧串里的内容（保留用于兼容，但清掉已过期的）+ 清理
+  prunePushMarks();
+  saveDB();
+}
+/* 一次性把旧 lastPush 串迁移进 pushMarks（幂等） */
+function migratePushMarks(){
+  if(!DB.settings) DB.settings={};
+  const old=DB.settings.lastPush||'';
+  if(!old) return;
+  if(!DB.settings.pushMarks || typeof DB.settings.pushMarks!=='object') DB.settings.pushMarks={};
+  const now=Date.now();
+  old.split(',').filter(Boolean).forEach(k=>{
+    if(!DB.settings.pushMarks[k]) DB.settings.pushMarks[k]=now;
+  });
+  prunePushMarks();
+  // 迁移完成后清空旧串（此后只读 pushMarks）
+  DB.settings.lastPush='';
+}
+
+/* ============================================================
    定时提醒检查（每次打开应用时检查）
    ============================================================ */
 async function checkScheduledPush(){
   if(DB.settings.autoPush===false) return; // 定时推送已关闭
+  try{ migratePushMarks(); }catch(e){}
+  // v2.3.19：先把云端最新数据拉下来再判标记。
+  // 原实现是"先写标记 → 再在 generateMorningPush 内部 pull"，pull 回来的云端旧
+  // lastPush 会把刚写的标记覆盖掉（多设备场景 + 标量合并），导致反复生成。
+  // 现在改为：pull 在前 → 基于合并后的最新状态判标记 → 写标记 → 生成。
+  try{ await syncPullAndMerge(); }catch(e){ console.warn('[scheduled push] pre pull err', e); }
   const now=new Date();
   const h=now.getHours();
   const today=todayStr();
-  const lastPush=DB.settings.lastPush||'';
   // 早7点后且今天没推过早间
-  if(h>=7 && !lastPush.includes(today+'_morning')){
-    DB.settings.lastPush=(lastPush?lastPush+',':'')+today+'_morning';
-    saveDB();
+  if(h>=7 && !hasPushMark(today,'morning')){
+    setPushMark(today,'morning');
     try{
-      await generateMorningPush();
+      await generateMorningPush({skipPull:true});
       toast('早间推送已生成');
     }catch(e){
       console.error('早间推送生成失败',e);
@@ -7296,10 +7407,9 @@ async function checkScheduledPush(){
     }
   }
   // 晚22点后且今天没推过晚间
-  if(h>=22 && !lastPush.includes(today+'_night')){
-    DB.settings.lastPush=(DB.settings.lastPush?DB.settings.lastPush+',':'')+today+'_night';
-    saveDB();
-    await generateNightPush();
+  if(h>=22 && !hasPushMark(today,'night')){
+    setPushMark(today,'night');
+    await generateNightPush({skipPull:true});
     toast('晚间复盘提醒');
   }
 }
@@ -7339,7 +7449,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.3.17';
+const APP_VERSION='v2.3.20';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
@@ -7980,6 +8090,24 @@ function mergeLocalCloud(local, cloud){
   }
   mergedSettings.lastModified = Math.max(ls.lastModified||0, cs.lastModified||0);
   if(ls.lastSyncTimeTs) mergedSettings.lastSyncTimeTs = ls.lastSyncTimeTs;
+  /* v2.3.19：pushMarks（推送去重标记）必须按**并集**合并，不能走上面的标量「本地优先」。
+     否则多设备下：设备 A 推过并写了标记上传，设备 B 本地还没有该标记 → B 的旧值覆盖
+     → 标记丢失 → 同一天反复生成推送（实测 10-02 早间推送刷出 7 条）。
+     并集后按 7 天清理，对象不增长。 */
+  {
+    const lp = (ls.pushMarks && typeof ls.pushMarks==='object') ? ls.pushMarks : {};
+    const cp = (cs.pushMarks && typeof cs.pushMarks==='object') ? cs.pushMarks : {};
+    const union = {};
+    for(const k of Object.keys(cp)) union[k] = cp[k];
+    for(const k of Object.keys(lp)) union[k] = Math.max(union[k]||0, lp[k]||0);
+    const cutoff = pushMarkDaysAgoKey(PUSH_MARK_KEEP_DAYS);
+    for(const k of Object.keys(union)){
+      const day = k.slice(0,10);
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(day) || day < cutoff) delete union[k];
+    }
+    mergedSettings.pushMarks = union;
+    mergedSettings.lastPush = '';   // 旧字段迁移完毕后不再使用
+  }
   // lastWeekMonday：取最新值（字符串日期比较），防止手机旧值覆盖平板新值导致误重置
   if(cs.lastWeekMonday && ls.lastWeekMonday){
     mergedSettings.lastWeekMonday = cs.lastWeekMonday > ls.lastWeekMonday ? cs.lastWeekMonday : ls.lastWeekMonday;
@@ -8155,6 +8283,21 @@ async function _syncPullAndMergeInner(){
     if(!Array.isArray(DB.mistakes)) DB.mistakes=[];
     if(!Array.isArray(DB.knowledge)) DB.knowledge=[];
     if(!Array.isArray(DB.pushHistory)) DB.pushHistory=[];
+    // v2.3.19：pushHistory 是并集合并，多设备下同一天同类型会出现多条。
+    // 合并后按「type + 标题日期」去重，保留 ts 最新的一条（历史遗留的重复也就此清理）。
+    try{
+      const seenPush={};
+      DB.pushHistory.sort((a,b)=>(a.ts||0)-(b.ts||0));   // 旧的在前 → 后出现的覆盖
+      DB.pushHistory.forEach(p=>{
+        const dm=(p.title||'').match(/(\d{4}-\d{2}-\d{2})/);
+        if(dm) seenPush[(p.type||'')+'|'+dm[1]]=p;
+      });
+      const keep=new Set(Object.values(seenPush));
+      DB.pushHistory=DB.pushHistory.filter(p=>{
+        const dm=(p.title||'').match(/(\d{4}-\d{2}-\d{2})/);
+        return !dm || keep.has(p);   // 无日期的保留原样
+      });
+    }catch(e){}
     if(!DB.settings||typeof DB.settings!=='object') DB.settings={};
     DB.settings.lastSyncTime = new Date().toLocaleString('zh-CN');
     // 同步合并后执行新周重置（用合并后的 lastWeekMonday，避免用旧值误重置）
