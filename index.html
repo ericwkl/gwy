@@ -365,6 +365,13 @@ const MODULES = [
   {key:'zh',   name:'综合应用', icon:'📋', subs:[], group:'sy'},
   {key:'ms',   name:'面试',     icon:'🎤', subs:[], group:'sy'},
 ];
+/* v2.3.22：每日复盘专用的额外分类「行测套卷」。
+   为什么不直接塞进 MODULES：MODULES 同时驱动错题本 / 考点的筛选标签
+   （第 907/959/1043 行等），加进去会让那些地方也冒出「行测套卷」标签（噪音）。
+   所以复盘单独用 MODULES + REVIEW_EXTRA_CATS 的合并列表 REVIEW_CATS。 */
+const REVIEW_EXTRA_CATS=[{key:'xcj', name:'行测套卷', icon:'📝', subs:[], group:'sy'}];
+const REVIEW_CATS=MODULES.concat(REVIEW_EXTRA_CATS);
+function reviewCat(key){ return REVIEW_CATS.find(m=>m.key===key); }
 /* ---------- 子模块名规范化（v2.2.90）----------
    历史遗留：判断推理的「逻辑推理」在 v2.2.38 已统一为「逻辑判断」，
    但别名映射只做在 Excel 导入路径上，存量数据里仍存着旧名「逻辑推理」。
@@ -612,7 +619,7 @@ document.getElementById('modalMask').addEventListener('click', e=>{
 });
 
 /* ============================================================
-   渲染：主页  (每日任务 → 每日复盘 → 最近错题)
+   渲染：主页  (每日任务 → 待复习考点 → 待复习错题 → 每日复盘)
    ============================================================ */
 function renderHome(){
   const today = todayStr();
@@ -644,17 +651,18 @@ function renderHome(){
     </div>`;
   }
 
-  // 每日复盘
+  // 每日复盘（v2.3.21：移到「待复习错题」卡片下面）
   let reviewHtml = `<div class="card">
     <div class="card-title"><span class="left"><span class="emoji">📒</span>每日复盘</span>
       <div style="display:flex;gap:6px;">
         <button class="btn btn-sm btn-ghost" onclick="showAllReviews()">全部</button>
+        <button class="btn btn-sm btn-ghost" onclick="reviewModal(null,'xcj')">+ 套卷复盘</button>
         <button class="btn btn-sm btn-outline" onclick="reviewModal()">+ 复盘</button>
       </div></div>
     <div>${renderReviewList(5)}</div>
   </div>`;
 
-  // 今日待复习考点（艾宾浩斯，每日复盘下面）
+  // 今日待复习考点（艾宾浩斯）
   const mistakeEbbHtml = `<div class="card">
     <div class="card-title"><span class="left"><span class="emoji">🔁</span>待复习考点</span>
       <div style="display:flex;gap:6px;">
@@ -677,7 +685,7 @@ function renderHome(){
     ${renderTodayErrorEbb()}
   </div>`;
 
-  document.getElementById('page-home').innerHTML = examHtml + reviewHtml + mistakeEbbHtml + errorHtml;
+  document.getElementById('page-home').innerHTML = examHtml + mistakeEbbHtml + errorHtml + reviewHtml;
 }
 
 /* ============================================================
@@ -1263,7 +1271,11 @@ function viewMistakeDetail(id){
   if(!m) return;
   const st=getMistakeEbb(m);
   const mod=MODULES.find(x=>x.key===m.module);
-  openModal(`<div class="modal-head"><h3>考点详情</h3><button class="modal-close" onclick="backFromMistakeDetail()">✕</button></div>
+  openModal(`<div class="modal-head"><h3>考点详情</h3><div style="display:flex;align-items:center;gap:10px;">
+      <span role="button" title="${m.star?'取消收藏':'收藏'}" data-star="mk:${m.id}"
+        onclick="event.stopPropagation();toggleStar('mk','${m.id}')"
+        style="font-size:20px;line-height:1;cursor:pointer;user-select:none;${m.star?'':'opacity:.28;'}">${m.star?'⭐':'☆'}</span>
+      <button class="modal-close" onclick="backFromMistakeDetail()">✕</button></div></div>
     <div style="font-size:11px;color:var(--text-light);margin-bottom:10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
       <span style="padding:2px 8px;border-radius:10px;background:var(--warning-soft);color:var(--warning);">${mod?mod.name:'未分类'}${m.sub?' · '+m.sub:''}</span>
       <span style="padding:2px 8px;border-radius:10px;background:var(--accent-soft);color:var(--accent);">${st.done?'✅ 5轮已完成':ebbRoundText(st)+'/5'}</span>
@@ -1601,7 +1613,7 @@ function renderReviewList(limit){
   const list = [...DB.reviews].reverse().sort((a,b)=>b.date.localeCompare(a.date)||0).slice(0,limit||100);
   if(!list.length) return '<div class="empty-state"><div class="emoji">🧠</div><div class="txt">还没有复盘记录</div></div>';
   return list.map(r=>{
-    const mod = MODULES.find(m=>m.key===r.module);
+    const mod = reviewCat(r.module);
     const summary = (r.template||'').replace(/\s+/g,' ').trim().slice(0,28);
     return `<div class="error-item" style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:9px 10px;" onclick="viewReviewDetail('${r.id}')">
       <span class="r-tag" style="flex-shrink:0;margin:0;font-size:10px;white-space:nowrap;">${mod?mod.icon+' '+mod.name:'未分类'}${r.sub?'·'+escapeHtml(r.sub):''}</span>
@@ -1614,9 +1626,14 @@ function renderReviewList(limit){
 /* 复盘详情弹窗 */
 function viewReviewDetail(id){
   const r=DB.reviews.find(x=>x.id===id); if(!r) return;
-  const mod=MODULES.find(m=>m.key===r.module);
+  const mod=reviewCat(r.module);
+  // v2.3.22：行测套卷复盘若关联了「试卷」模块里的套卷，给出直达试卷分析报告的入口
+  const linkedPaper = r.module==='xcj' && r.sub ? DB.papers.find(p=>p.name===r.sub) : null;
   openModal(`<div class="modal-head"><h3>📒 ${r.date} 复盘</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
-    <div style="font-size:11px;color:var(--text-light);margin-bottom:8px;">${mod?mod.icon+' '+mod.name:'未分类'}${r.sub?' · '+escapeHtml(r.sub):''}</div>
+    <div style="font-size:11px;color:var(--text-light);margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <span>${mod?mod.icon+' '+mod.name:'未分类'}${r.sub?' · '+escapeHtml(r.sub):''}</span>
+      ${linkedPaper?`<span role="button" onclick="closeModal();navTo('paper');setTimeout(()=>{ ${linkedPaper.analysis?`viewPaperReport('${linkedPaper.id}')`:`paperModal('${linkedPaper.id}')`} },150)" style="cursor:pointer;color:var(--info);text-decoration:underline;font-size:11px;">📄 查看试卷${linkedPaper.analysis?'分析报告':'记录'} ↗</span>`:''}
+    </div>
     ${r.template?`<div style="font-size:13px;color:var(--text);white-space:pre-wrap;line-height:1.7;margin-bottom:8px;">${escapeHtml(r.template)}</div>`:''}
     ${r.photos&&r.photos.length?`<div class="photos" style="margin-bottom:8px;">${r.photos.map(p=>`<img src="${b64Url(p)}" onerror="this.onerror=null;this.src='${p}'" onclick="previewImg(this.src)">`).join('')}</div>`:''}
     ${r.audio?renderVoiceBar(r.audio, r.audioText, 'rv_'+r.id):''}
@@ -1631,13 +1648,13 @@ let rvFilter='';
 function showAllReviews(){
   const list = [...DB.reviews].reverse().sort((a,b)=>b.date.localeCompare(a.date)||0);
   const fl = rvFilter ? list.filter(r=>r.module===rvFilter) : list;
-  const tags=[['','全部']].concat(MODULES.map(m=>[m.key,m.name]))
-    .map(([k,n])=>`<span class="tag ${rvFilter===k?'on':''}" data-k="${k}" onclick="setRvFilter('${k}')">${k?MODULES.find(m=>m.key===k).icon+' ':''}${n}</span>`).join('');
+  const tags=[['','全部']].concat(REVIEW_CATS.map(m=>[m.key,m.name]))
+    .map(([k,n])=>`<span class="tag ${rvFilter===k?'on':''}" data-k="${k}" onclick="setRvFilter('${k}')">${k?reviewCat(k).icon+' ':''}${n}</span>`).join('');
   openModal(`<div class="modal-head"><h3>📒 全部每日复盘（${list.length}条）</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div style="font-size:11px;color:var(--text-light);margin-bottom:6px;">点标签筛选模块</div>
     <div class="tag-list">${tags}</div>
     <div style="max-height:62vh;overflow-y:auto;">${fl.length?fl.map(r=>{
-      const mod=MODULES.find(m=>m.key===r.module);
+      const mod=reviewCat(r.module);
       const summary=(r.template||'').replace(/\s+/g,' ').trim().slice(0,40);
       return `<div style="display:flex;align-items:center;gap:8px;padding:9px 10px;border-bottom:1px solid var(--border);cursor:pointer;" onclick="viewReviewDetail('${r.id}')">
         <span class="r-tag" style="flex-shrink:0;font-size:10px;white-space:nowrap;">${mod?mod.icon+' '+mod.name:'未分类'}${r.sub?'·'+escapeHtml(r.sub):''}</span>
@@ -2519,15 +2536,16 @@ function compressImage(file, maxSize, quality){
    每日复盘 弹窗
    ============================================================ */
 let _reviewPhotos=[];
-function reviewModal(id){
+function reviewModal(id, presetModule){
   let r=null;
   if(id) r=DB.reviews.find(x=>x.id===id);
   _reviewPhotos = r&&r.photos?[...r.photos]:[];
-  const modOptions = MODULES.map(m=>`<option value="${m.key}" ${r&&r.module===m.key?'selected':''}>${m.icon} ${m.name}</option>`).join('');
+  const selMod = r ? r.module : (presetModule||''); // v2.3.22：新增时可预设分类（如行测套卷）
+  const modOptions = REVIEW_CATS.map(m=>`<option value="${m.key}" ${m.key===selMod?'selected':''}>${m.icon} ${m.name}</option>`).join('');
   openModal(`<div class="modal-head"><h3>${id?'编辑':'新增'}每日复盘</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div class="form-row">
       <div class="form-group"><label>归属学习板块</label><select id="rv_module" onchange="updateRvSub()">${modOptions}</select></div>
-      <div class="form-group"><label>子模块</label><select id="rv_sub"><option value="">(不指定)</option></select></div>
+      <div class="form-group"><label id="rv_sub_label">子模块</label><select id="rv_sub"><option value="">(不指定)</option></select></div>
     </div>
     <div class="form-group"><label>📷 拍照上传</label>
       <input type="file" accept="image/*" multiple onchange="window._photoPending=onPhotoInput(this,_reviewPhotos);this.dataset.render='renderReviewPhotos'">
@@ -2556,10 +2574,20 @@ function reviewModal(id){
 /* 复盘弹窗：模块 → 子模块联动 */
 function updateRvSub(){
   const mk=document.getElementById('rv_module').value;
-  const m=MODULES.find(x=>x.key===mk);
   const s=document.getElementById('rv_sub');
-  if(!m||!s) return;
-  s.innerHTML='<option value="">(不指定)</option>'+(m.subs||[]).map(x=>`<option value="${x}">${x}</option>`).join('');
+  const lbl=document.getElementById('rv_sub_label');
+  if(!s) return;
+  // v2.3.22：行测套卷 —— 子模块改为「关联试卷」，列出「试卷」模块里已录的套卷名称
+  if(mk==='xcj'){
+    if(lbl) lbl.textContent='关联试卷';
+    const ps=[...DB.papers].sort((a,b)=>b.date.localeCompare(a.date));
+    s.innerHTML='<option value="">(不关联)</option>'
+      + ps.map(p=>`<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}${p.date?'（'+p.date+'）':''}</option>`).join('');
+    return;
+  }
+  if(lbl) lbl.textContent='子模块';
+  const m=reviewCat(mk);
+  s.innerHTML='<option value="">(不指定)</option>'+((m&&m.subs)||[]).map(x=>`<option value="${x}">${x}</option>`).join('');
 }
 function renderReviewPhotos(){
   const box=document.getElementById('reviewPhotos');
@@ -7449,7 +7477,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.3.20';
+const APP_VERSION='v2.3.22';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
