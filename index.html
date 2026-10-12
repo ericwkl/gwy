@@ -534,6 +534,12 @@ function toast(msg){
 
 /* ---------- 导航 ---------- */
 function navTo(name){
+  const content = document.querySelector('.app-content');
+  // v2.3.23：切换前记录当前页的滚动位置（原先这里无条件归零 → Tab 来回切就丢位置）
+  const curName = (document.querySelector('.page.active')?.id?.replace('page-',''))||'';
+  if(content && curName){
+    try{ localStorage.setItem('gk_scroll_'+curName, String(content.scrollTop)); }catch(e){}
+  }
   // 记忆最后停留页面：写入 URL hash（浏览器原生历史机制，从外链返回时 hash 自动恢复，比 localStorage 可靠）
   try{ localStorage.setItem('gk_last_tab',name); }catch(e){}
   try{
@@ -551,8 +557,8 @@ function navTo(name){
   if(tabEl) tabEl.classList.add('active');
   // 渲染对应页面
   renderPage(name);
-  const content = document.querySelector('.app-content');
-  if(content) content.scrollTop = 0;
+  // v2.3.23：恢复「目标页」上次的滚动位置（原为无条件 scrollTop=0）
+  if(content) restoreScrollPos(name);
 }
 
 const BOTTOM_NAV = [
@@ -4859,7 +4865,9 @@ async function renderAccu(){
   const seed=getAccuSeed();
   // v2.2.57：缓存带版本号——解析/渲染逻辑升级时手动+1，强制旧版本渲染的缓存 HTML 失效，
   // 防止跨版本复用旧缓存（如 v2.2.55 渲染的【莫此】拆词 HTML 在 v2.2.56 下继续命中）
-  const ACCU_CACHE_VER=16;  // v2.3.20：申论小题解析器兼容"飞书导出 Markdown"（剥 `#` 标题 / 剥行首
+  const ACCU_CACHE_VER=17;  // v2.3.24：申论小题卡改为「每天轮 1 个话题 + 全量展开」（原 3 分类×各3条），
+                            // 渲染结构变 → 旧缓存必须失效。
+                            // v2.3.20：申论小题解析器兼容"飞书导出 Markdown"（剥 `#` 标题 / 剥行首
                             // 有序编号 1.~122.）→ 解析结果变（旧缓存里带着一百多的编号），必须失效。
                             // v2.3.18：常识卡改为「轮到的那个话题全量展示」（去掉话题内抽稀），
                             // 卡片内容变多 → 旧缓存必须失效。
@@ -5103,21 +5111,18 @@ async function renderAccu(){
         const xtData=parseXiaoTi(xtItems);
         const xtCats=Object.keys(xtData).filter(k=>xtData[k].length);
         if(xtCats.length){
-          const pickCats=dailyPick(xtCats,20260830,3);
-          const xtHtml=pickCats.map(xc=>{          const isWN=/万能思维体系/.test(xc);
-          let items;
-          if(isWN){
-            // v2.2.46 可见性修复：万能思维体系分类级 dailyPick(salt=20260830) 与分类内 dailyPick(salt=hashStr(xc))
-            // 两个窗口恰好错开1位、永不直接相交，导致 11 行层级块永远抽不到（45天重合0天）。
-            // 改为：固定层级块（含"用好万能八条"的11行块）常驻首项，其余2个位置在 eg 例子块中每日轮换（仍每天3条）。
-            const wnArr=xtData[xc];
-            const hier=wnArr.filter(x=>/用好万能八条/.test(x));
-            const eg=wnArr.filter(x=>!/用好万能八条/.test(x));
-            items=[...(hier.length?hier:dailyPick(wnArr,hashStr(xc),1)), ...dailyPick(eg, hashStr(xc), 2)];
-          } else {
-            items=dailyPick(xtData[xc], hashStr(xc), 3);
-          } return `<details style="margin-bottom:6px;"><summary style="font-size:12px;font-weight:600;color:var(--text);cursor:pointer;padding:4px 0;">${escapeHtml(xc)}</summary><div>${items.map(x=>{const _i=x.indexOf('\u0001');const sub=_i>-1?x.slice(0,_i):'';const body=_i>-1?x.slice(_i+1):x;const tag=sub?`<span style="display:inline-block;font-size:10px;line-height:1.6;color:var(--text-light);background:var(--bg-soft);border-radius:8px;padding:0 6px;margin-right:5px;">${escapeHtml(sub)}</span>`:'';if(isWN && body.split('\n').length>2) return tag+renderWanneng(body); const lines=body.split('\n');if(lines.length<=1)return`<div style="font-size:12px;color:var(--text);padding:2px 0;line-height:1.7;">${tag}${escapeHtml(body)}</div>`;return`<div style="font-size:12px;color:var(--text);padding:2px 0;line-height:1.7;">${lines.map((l,i)=>i===0?`<span style="font-weight:500;">${tag}${escapeHtml(l)}</span>`:`<div style="padding-left:1em;margin-top:1px;color:var(--text-secondary);">${escapeHtml(l)}</div>`).join('')}</div>`;}).join('')}</div></details>`;}).join('');
-          cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>申论小题</span><span class="section-tag">${xtCats.length}类</span></div>${xtHtml}</div>`;
+          /* v2.3.24：改为「每天只轮 1 个话题，话题内全量展示」，与常识卡（v2.3.18）统一。
+             原实现：dailyPick(xtCats,20260830,3) 抽 3 个分类 → 每个分类再 dailyPick 3 条，
+             观感是「每天好几个半截话题」。现：轮转单位 = 1 个分类，落到哪个分类就把它的
+             条目**全部展开**（不再抽稀）；卡标题标签显示当前话题名；轮转周期 = 分类数（10 天一轮）。
+             卡种子并入 salt/索引，与「↻ 刷新」联动（刷新即换下一个话题）。 */
+          const xtOrder=seededShuffle(xtCats, 20260830+accuCardSeed('申论素材'));
+          const xtIdx=((dayIndexOfToday()+(DB.accuSeedCount||0)+accuCardSeed('申论素材')*7)%xtOrder.length+xtOrder.length)%xtOrder.length;
+          const xc=xtOrder[xtIdx];
+          const isWN=/万能思维体系/.test(xc);
+          const items=xtData[xc];   // v2.3.24：全量展示（原 v2.2.46 的 hier/eg 抽稀逻辑不再需要）
+          const xtHtml=`<details open style="margin-bottom:2px;"><summary style="font-size:11px;font-weight:600;color:var(--text-light);cursor:pointer;padding:2px 0;">共 ${items.length} 条（点此折叠/展开）</summary><div>${items.map(x=>{const _i=x.indexOf('\u0001');const sub=_i>-1?x.slice(0,_i):'';const body=_i>-1?x.slice(_i+1):x;const tag=sub?`<span style="display:inline-block;font-size:10px;line-height:1.6;color:var(--text-light);background:var(--bg-soft);border-radius:8px;padding:0 6px;margin-right:5px;">${escapeHtml(sub)}</span>`:'';if(isWN && body.split('\n').length>2) return tag+renderWanneng(body); const lines=body.split('\n');if(lines.length<=1)return`<div style="font-size:12px;color:var(--text);padding:2px 0;line-height:1.7;">${tag}${escapeHtml(body)}</div>`;return`<div style="font-size:12px;color:var(--text);padding:2px 0;line-height:1.7;">${lines.map((l,i)=>i===0?`<span style="font-weight:500;">${tag}${escapeHtml(l)}</span>`:`<div style="padding-left:1em;margin-top:1px;color:var(--text-secondary);">${escapeHtml(l)}</div>`).join('')}</div>`;}).join('')}</div></details>`;
+          cards+=`<div class="card"><div class="card-title"><span class="left"><span class="emoji">${icon}</span>申论小题</span><span style="display:flex;align-items:center;gap:6px;"><span class="section-tag" title="${escapeHtml(xc)}">${escapeHtml(xc)}</span>${accuCardRefreshBtn('申论素材')}</span></div>${xtHtml}</div>`;
         }
       }
     } else {
@@ -7446,7 +7451,14 @@ async function checkScheduledPush(){
    初始化
    ============================================================ */
 /* 保存/恢复滚动位置：从外链返回（页面重载）时，精确回到点击前的位置，而不是从头开始 */
+/* v2.3.23：升级为「按页记忆 + Tab 间切换也恢复」。
+   背景：navTo 原先无条件把 .app-content.scrollTop 归零，导致在 Tab 间来回切（尤其内容很长的
+   积累页）每次都要重新往下拖。现在：切页前保存当前页位置，切页后恢复目标页上次位置。
+   难点：积累页 renderAccu 是异步的（要先取实时新闻），内容高度随后才长出来；
+   一次性设置 scrollTop 会被浏览器按「当时的最大高度」截断，故在 ~1.2s 内分几次重设，
+   一旦检测到用户自己滚了（scrollTop 与我们设置值不符）立即放弃，避免和用户抢滚动条。 */
 function saveScrollPos(){
+  if(_restoringScroll) return; // 恢复过程中不写，避免把被截断的中间值存进去
   try{
     const content=document.querySelector('.app-content');
     if(!content) return;
@@ -7464,20 +7476,35 @@ function bindScrollSave(){
     _scrollTimer=setTimeout(saveScrollPos,250);
   });
 }
+let _scrollRestoreToken=0;
+let _restoringScroll=false;
 function restoreScrollPos(page){
   try{
     const content=document.querySelector('.app-content');
-    const saved=parseInt(localStorage.getItem('gk_scroll_'+(page||'home'))||'0',10);
-    if(content && saved>0){
-      content.scrollTop=saved;
-      // 等渲染完成后再校正一次（卡片异步渲染可能改变高度）
-      setTimeout(()=>{ if(content.scrollTop<=0) content.scrollTop=saved; },400);
-    }
+    if(!content) return;
+    let saved=0;
+    try{ saved=parseInt(localStorage.getItem('gk_scroll_'+(page||'home'))||'0',10)||0; }catch(e){}
+    const my=++_scrollRestoreToken;
+    let expect=-1;           // 上一次我们设置的值，用于识别「用户是否自己滚了」
+    _restoringScroll=true;
+    const apply=()=>{
+      if(my!==_scrollRestoreToken) return;                  // 已被更新的恢复取代
+      if(expect>=0 && Math.abs(content.scrollTop-expect)>8) return; // 用户自行滚动 → 放弃
+      const max=Math.max(0, content.scrollHeight-content.clientHeight);
+      const target=Math.max(0, Math.min(saved, max));
+      content.scrollTop=target;
+      expect=target;
+    };
+    apply();
+    [120,350,700,1200].forEach(t=>setTimeout(apply,t));
+    setTimeout(()=>{
+      if(my===_scrollRestoreToken){ _restoringScroll=false; saveScrollPos(); }
+    },1400);
   }catch(e){}
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.3.22';
+const APP_VERSION='v2.3.24';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
