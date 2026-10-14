@@ -4604,6 +4604,9 @@ function extractYyWords(kbItems){
        若释义行内还挤着其它词条（无换行），按出现位置自动拆开。 */
     const pairRe=/^(?:[一二三四五六七八九十\d]+[.、]\s*)?([^【】\n：、，。．.；;！!？?\s]{2,12}(?:\s*VS\s*[^【】\n：、，。．.；;！!？?\s]{2,12}){1,6})\s*[。．.]?$/i;
     const lines=txt.split(/\n/).map(s=>s.trim().replace(/^[#*◆▶▷▼\s]+/,'').replace(/[*#]+$/,'')).filter(Boolean);
+    /* v2.3.32：内容标签词 —— 「出处：…」「来源：…」这类行是**内容说明**，不是词条。
+       同时用于「分类标题」识别（见下方 looksLikeCategoryHead）。 */
+    const YY_LABEL_WORD=/^(出处|来源|例句|释义|意思|含义|辨析|区别|用法|提示|说明|注意|备注|拓展|延伸|近义|反义|同义)$/;
     for(let i=0;i<lines.length;i++){
       const lm=lines[i].match(pairRe);
       if(!lm) continue;
@@ -4696,7 +4699,8 @@ function extractYyWords(kbItems){
     const re2a=/(?:^|\n)(?:\d+[.、]\s*)?[【]?([^】\n：、，\d\s]{2,8})[】]?\s*[:：]\s*([^\n]{2,150})/g;
     while((m=re2a.exec(txt))){
       const word=m[1].trim(), body=m[2].trim();
-      if(/积累$/.test(word)||/^(高频|易混|生词|词语|词汇|近义|反义|辨析)$/.test(word)||/诗云|诗曰|[^]云$|曰$/.test(word)) continue;
+      if(/积累$/.test(word)||/^(高频|易混|生词|词语|词汇)$/.test(word)||/诗云|诗曰|[^]云$|曰$/.test(word)) continue;
+      if(YY_LABEL_WORD.test(word)) continue;   // v2.3.32：出处/来源/释义… 等标签行不当词条（用户截图里的【出处】即此类）
       // v2.2.83：跳过"编号+词名独占一行"词条下方的"出处：…"行——
       // 该行形如"出处：宋·朱熹《观书有感》…"，会被 re2a 当成"词：释义"产生一条【出处】，
       // 与编号词条（【源头活水】）内容重复。判据：该行前一行是"数字. 纯词名"。
@@ -4763,6 +4767,28 @@ function extractYyWords(kbItems){
       if(/积累$/.test(w)||/^(高频词|易混淆词语|生词|正确搭配|文段积累)$/.test(w)) return false;
       return true;
     };
+    /* v2.3.32：分类标题识别 —— 用户反馈「发展相关的词语这么多都没显示」。
+       「与发展相关的词语」「大规模、快速的变化」这类行是**分类小标题**，不是词条：
+       它们后面紧跟的是「词：释义」（如「风起云涌：…」）；
+       而真正的独立行词条（「描摹」「引擎」「源头活水」「积贫积弱」）后面跟的是
+       释义行/编号子项，不会是「其它词：释义」。
+       判据：从下一行起跳过连续的「无标点短行」，第一个有内容的行若是「词：释义」
+       且词名不是内容标签词（出处/例/释义…），则本行是分类标题 → 跳过。 */
+    const looksLikeCategoryHead=(arr, idx)=>{
+      for(let j=idx+1;j<arr.length;j++){
+        const ln=arr[j];
+        if(!ln) continue;
+        if(arr[j].match(pairRe)) return false;                  // 下一个 VS 对比组
+        if(/^\d+[.、]/.test(ln)) return false;                  // 编号行 / 编号词条
+        if(/^[（(]/.test(ln)) return false;                      // （来源）例句
+        const dm=ln.match(/^([^【】\n：、，。．.；;！!？?\s]{2,12})\s*[：:]\s*(.+)$/);
+        if(dm) return !YY_LABEL_WORD.test(dm[1]);               // 「词：释义」→ 是分类标题（词名本身是标签词则否）
+        if(/^【[^】]+】/.test(ln)) return true;
+        if(ln.length<=20 && !/[，。！？；…]/.test(ln)) continue;  // 无标点短行（下一级小标题）→ 继续往后看
+        return false;                                            // 长句 / 例句 → 不是
+      }
+      return false;
+    };
     for(let i=0;i<lines.length;i++){ // 遍历到末行：空格分隔词条自带释义，最后一行也可成词条
       let cur=lines[i].replace(/^[【】\s]+|[【】\s]+$/g,'');
       let inlineRest=null;
@@ -4793,6 +4819,7 @@ function extractYyWords(kbItems){
       if(!isStandaloneWordLine(cur)) continue;
       if(cur===(k.title||'').trim()||seen.has(cur)) continue;
       if(lines[i].match(pairRe)) continue;                        // 对比组标题（已另行处理）
+      if(looksLikeCategoryHead(lines, i)) continue;                // v2.3.32：分类小标题（如「与发展相关的词语」）不是词条
       let defs=[], exs=[], sawEx=false;
       if(inlineRest) defs.push(inlineRest);
       // v2.2.83：编号+词名独占一行的词条，其"出处：…"行属于本条内容、不能当"下一个词条"（否则标题被出处抢走）
@@ -4865,7 +4892,11 @@ async function renderAccu(){
   const seed=getAccuSeed();
   // v2.2.57：缓存带版本号——解析/渲染逻辑升级时手动+1，强制旧版本渲染的缓存 HTML 失效，
   // 防止跨版本复用旧缓存（如 v2.2.55 渲染的【莫此】拆词 HTML 在 v2.2.56 下继续命中）
-  const ACCU_CACHE_VER=22;  // v2.3.29：政治理论把 `##`/`###` 保留为**子话题**并默认折叠
+  const ACCU_CACHE_VER=25;  // v2.3.32：言语解析器修「分类标题误判」+ 每日条数 12→30 → 词条集合与展示量都变。
+                            // v2.3.31：常识「广东省情」取消屏蔽 → 常识 7 → 8 个话题，旧缓存必须失效。
+                            // v2.3.30：常识改为与政治理论同粒度（`#` 一级 = 轮转单位，`##`/`###` = 子话题）
+                            // → 常识由 12 话题（法律拆6）变为 7 话题，旧缓存必须失效。
+                            // v2.3.29：政治理论把 `##`/`###` 保留为**子话题**并默认折叠
                             // → 解析结构 + 渲染结构均变，旧缓存必须失效。
                             // v2.3.28：政治理论轮转单位定稿为 `# 一级标题`（一、做题方法/二、马克思主义/
                             // 三、新思想/四、时政），`##`+`###` 全部并入 → 话题粒度再变，旧缓存必须失效。
@@ -5037,7 +5068,9 @@ async function renderAccu(){
       // 失效重渲染）直接复用已抽好的一批；次日（日期变）或点"换一批"（accuSeedCount+1）才基于
       // 最新词库重抽。修复用户反馈"每次更新知识库后言语积累整批变掉"。
       // 抽取本身仍为确定性算法（同词库同日期跨设备结果一致），yyPickCache 仅防止词库集合变化扰动当天批次。
-      const yyKey=todayStr()+'@'+(DB.accuSeedCount||0)+'@'+accuCardSeed('言语素材');
+      /* v2.3.32：key 并入解析缓存版本 —— 解析规则变化（词条集合变了）时，
+         当天已抽好的批次必须重抽；否则会复用旧的 12 条，条数上限调整也看不到。 */
+      const yyKey=todayStr()+'@'+(DB.accuSeedCount||0)+'@'+accuCardSeed('言语素材')+'@v'+ACCU_CACHE_VER;
       let picked=(DB.yyPickCache&&DB.yyPickCache.key===yyKey)?(DB.yyPickCache.list||[]):null;
       if(picked){
         picked=picked.filter(w=>words.indexOf(w)>=0); // 词条当天被删则剔除，避免展示已删内容
@@ -5046,7 +5079,7 @@ async function renderAccu(){
       if(!picked){
         // v2.2.83：salt 并入本卡刷新偏移——否则点了"↻ 刷新"清掉 yyPickCache 后，
         // 仍用固定 salt 20260820 重抽，结果与刷新前完全一致（表面看按钮"没反应"）
-        picked=pickFresh(words,20260820+accuCardSeed('言语素材'),12,'accuYySeen');
+        picked=pickFresh(words,20260820+accuCardSeed('言语素材'),30,'accuYySeen');   // v2.3.32：12 → 30（用户要求）
         DB.yyPickCache={key:yyKey,list:picked};
         saveDB();
       }
@@ -5146,13 +5179,14 @@ async function renderAccu(){
       //   `# 二、法律常识`、`# 八、广东省情` 下面紧跟的是 `## （X）子节`、
       //   自身没有 direct 条目 → 大类名被**整段丢弃**，子节全部平级成独立话题。
       //   实测用户线上常识：20 个话题里「广东省情」散成 8 个（占 40%）、
-      //   「法律常识」散成 6 个（占 30%），而内容最多的「经济常识」19 条只占 1 个名额，
-      //   20 天才轮一次、一次只抽 5 条 → 80 天才转完一遍，观感即"有的内容根本没轮换到"。
-      // 规则（用户指定）：大类 = 轮转单位；仅「法律常识」按 `##` 小标题再拆；「广东省情」屏蔽。
-      // ⚠️ 仅对【常识卡】生效。政治理论卡共用这段解析器，必须保持原行为
-      //    （每个 `##`/`###` 都独立成话题，如 `### 唯物论`/`### 辩证法`/`### 认识论`），
-      //    否则「二、马克思主义」下的 5 个子话题会被压成 1 个重名话题 → 内容大量丢失。
-      const IS_CS = (cat.display==='常识');
+      // v2.3.30：常识**改为与政治理论完全一致的粒度**（用户：「我不是说常识也按大标题分吗」）。
+      //   轮转单位 = `#` 一级标题（一、经济常识 / 二、法律常识 / … / 八、广东省情）；
+      //   `##`/`###` 一律保留为**子话题**（渲染时默认折叠）。
+      //   原 v2.3.17 的「法律常识按 ## 拆成 6 个话题」取消 —— 法律的 6 个小标题
+      //   现在是「法律常识」话题下的 6 个折叠子话题。
+      // v2.3.31：广东省情**取消屏蔽**（用户：「广东省情不屏蔽了」）→ 它是第 8 个正常话题，
+      //   其下 8 个 `## （X）` 作为折叠子话题。至此常识 = 8 个话题。
+      // ⚠️ 自此常识卡与政治理论卡走**同一条路径**，不再有 IS_CS 分流。
       let curL1='';
       /* v2.3.29：政治理论的「子话题」分组（用户：「你可以把子话题改成默认折叠」）。
          v2.3.28 把轮转单位定成 `#` 一级标题后，`##`/`###` 的标题文字被直接丢弃 ——
@@ -5161,9 +5195,6 @@ async function renderAccu(){
          渲染时 subs 逐个用**默认折叠**的 <details> 呈现。 */
       let curSubName=null, curSubs=[];
       const CN_NUM='一二三四五六七八九十';
-      // v2.3.17：需按键分拆小标题的大类（仅法律常识）；整块屏蔽的大类（广东省情）
-      const SPLIT_L1=/法律常识/;
-      const SKIP_L1=/广东省情/;
       items.forEach(k=>{
         /* v2.3.25：每份知识库条目（= 一份文档）独立成篇。
            起因（用户「你把两份文档的内容混在一起了」）：curTopic/curItems/curItem/curIndent/curL1
@@ -5174,12 +5205,8 @@ async function renderAccu(){
            处理：进入新文档前先结算上一份未收尾的话题，再复位全部状态。
            单份文档时本段等价于空操作，行为逐字节不变。 */
         if(curItem){ curItems.push(curItem); curItem=null; }
-        if(!IS_CS){
-          if(curSubName!==null && curItems.length){ curSubs.push({name:curSubName, items:curItems}); curItems=[]; }
-          if(curTopic && (curItems.length||curSubs.length)) topics.push({topic:curTopic, items:curItems, subs:curSubs});
-        }else if(curTopic&&curItems.length && !SKIP_L1.test(curL1||'')){
-          topics.push({topic:curTopic, items:curItems});
-        }
+        if(curSubName!==null && curItems.length){ curSubs.push({name:curSubName, items:curItems}); curItems=[]; }
+        if(curTopic && (curItems.length||curSubs.length)) topics.push({topic:curTopic, items:curItems, subs:curSubs});
         curTopic=null; curItems=[]; curItem=null; curIndent=-1; curL1='';
         curSubName=null; curSubs=[];
         // v2.2.97：保留行首缩进 —— 飞书 blocks 重建后，缩进深度 = 树深，
@@ -5227,25 +5254,17 @@ async function renderAccu(){
           const hLvl=(raw.trim().match(/^(#{1,6})\s+/)||[])[1];
           const hLvlDepth=hLvl?hLvl.length:0;
           if(/^[一二三四五六七八九十]+[、，]/.test(line) && (hLvlDepth===0||hLvlDepth===1)){
-            /* v2.3.29：政治理论 —— 结算上一个大类（含其未收尾的子话题） */
-            if(!IS_CS){
-              if(curItem){ curItems.push(curItem); curItem=null; }
-              if(curSubName!==null && curItems.length){ curSubs.push({name:curSubName, items:curItems}); curItems=[]; }
-              if(curTopic && (curItems.length||curSubs.length)) topics.push({topic:curTopic, items:curItems, subs:curSubs});
-              curSubName=null; curSubs=[];
-              curL1=line.replace(/^[一二三四五六七八九十]+[、，]\s*/,'').trim();
-              curTopic=curL1; curItems=[]; curIndent=-1;
-              continue;
-            }
+            /* v2.3.30：`#` 一级标题 = **轮转单位**（常识与政治理论同规则）。
+               进入新大类前，先结算上一个大类（含其未收尾的子话题）。 */
             if(curItem){ curItems.push(curItem); curItem=null; }
-            if(curTopic&&curItems.length) topics.push({topic:curTopic, items:curItems});
-            curL1=line;
-            curTopic=null; curItems=[]; curIndent=-1;
-            if(SKIP_L1.test(line)) { continue; }
-            if(SPLIT_L1.test(line)) { continue; }
-            curTopic=line;
+            if(curSubName!==null && curItems.length){ curSubs.push({name:curSubName, items:curItems}); curItems=[]; }
+            if(curTopic && (curItems.length||curSubs.length)) topics.push({topic:curTopic, items:curItems, subs:curSubs});
+            curSubName=null; curSubs=[];
+            curL1=line.replace(/^[一二三四五六七八九十]+[、，]\s*/,'').trim();
+            curTopic=curL1; curItems=[]; curIndent=-1;
             continue;
           }
+          /* v2.3.31：广东省情已取消屏蔽（用户：「广东省情不屏蔽了」）—— 按统一规则正常成话题。 */
           /* v2.3.6：markdown 标题（## / ### 等）统一作为话题分隔。
              背景：飞书 blocks 重建后标题带 `#` 前缀，但上面第 4901 行 stripped
              会把 `#` 一起剥掉，导致解析器无从判断"这是标题"。后果（用户反馈
@@ -5264,39 +5283,20 @@ async function renderAccu(){
             if(hNum) h=hNum[1].trim();
             h=h.replace(/^[一二三四五六七八九十]+[、，]\s*/,'').trim();
             if(h){
-              if(IS_CS && SKIP_L1.test(curL1||'')) continue;   // v2.3.17：广东省情整块屏蔽
-              /* v2.3.28：政治理论 —— **轮转单位 = `#` 一级标题**（用户：「你按照一级标题来吧」）。
-                 `## （X）…` 与 `### …` 一律并入当前一级大标题，不另起轮转单位。
-                 因此「# 二、马克思主义」下的（一）辩证唯物主义 /（二）历史唯物主义 /（三）政治经济学
-                 会合成一个话题；「# 三、新思想」下的九个子节同理。 */
-              /* v2.3.29：政治理论 —— `##`/`###` 保留为**子话题**（名字不丢），渲染时默认折叠。 */
-              if(!IS_CS){
-                if(curItem){ curItems.push(curItem); curItem=null; }
-                if(curSubName!==null && curItems.length){ curSubs.push({name:curSubName, items:curItems}); curItems=[]; }
-                curSubName=h; curIndent=-1;
-                continue;
-              }
+              /* v2.3.28/29/30：`##`/`###` 一律保留为**子话题**（标题名不丢），渲染时默认折叠。
+                 常识与政治理论同规则。 */
               if(curItem){ curItems.push(curItem); curItem=null; }
-              if(curTopic&&curItems.length) topics.push({topic:curTopic, items:curItems});
-              // v2.3.17：常识卡 —— 法律常识按 `##` 小标题拆话题（标题带大类前缀便于辨认）；
-              //   其他大类下若出现更深标题，仍并入当前大类、不另起话题。
-              if(IS_CS){
-                if(SPLIT_L1.test(curL1||'')) curTopic=curL1+' · '+h;
-                else curTopic=curL1||h;
-              }else{
-                curTopic=h;
-              }
-              curItems=[]; curIndent=-1;
+              if(curSubName!==null && curItems.length){ curSubs.push({name:curSubName, items:curItems}); curItems=[]; }
+              curSubName=h; curIndent=-1;
               continue;
             }
           }
           // 二级标题：（一）宪法
           const m2=line.match(/^[（(][一二三四五六七八九十\d]+[）)]\s*(.+)$/);
           if(m2){
-            if(IS_CS && SKIP_L1.test(curL1||'')) continue;   // v2.3.17：广东省情整块屏蔽
-            /* v2.3.28：政治理论 —— 已经出现过 `#` 一级标题时，裸 `（X）` 子标题同样并入当前一级大标题。
+            /* v2.3.28/30：已出现过 `#` 一级标题时，裸 `（X）` 子标题同样作为**子话题**。
                （加 `curL1` 前提：文档完全没有 `#` 时保持旧行为，避免整篇塌成一个「知识点」。） */
-            if(!IS_CS && curL1){
+            if(curL1){
               if(curItem){ curItems.push(curItem); curItem=null; }
               if(curSubName!==null && curItems.length){ curSubs.push({name:curSubName, items:curItems}); curItems=[]; }
               curSubName=m2[1].trim(); curIndent=-1;
@@ -5304,13 +5304,7 @@ async function renderAccu(){
             }
             if(curItem){ curItems.push(curItem); curItem=null; }
             if(curTopic&&curItems.length) topics.push({topic:curTopic, items:curItems});
-            // v2.3.17：日常识拆小标题，非常识卡保持原行为
-            if(IS_CS){
-              if(SPLIT_L1.test(curL1||'')) curTopic=curL1+' · （'+m2[1].trim()+'）';
-              else curTopic=curL1||m2[1].trim();
-            } else {
-              curTopic=m2[1].trim();
-            }
+            curTopic=m2[1].trim();
             curItems=[]; curIndent=-1;
             continue;
           }
@@ -5364,17 +5358,13 @@ async function renderAccu(){
           if(!body){ curItem=null; curIndent=-1; }
         }
       });
-      // 收尾（v2.3.29：政治理论还要结算最后一个子话题）
+      // 收尾（结算最后一个大类 + 其未收尾的子话题）
       if(curItem){ curItems.push(curItem); curItem=null; }
-      if(!IS_CS){
-        if(curSubName!==null && curItems.length){ curSubs.push({name:curSubName, items:curItems}); curItems=[]; }
-        if(curTopic && (curItems.length||curSubs.length)) topics.push({topic:curTopic, items:curItems, subs:curSubs});
-        else if(!curTopic && curSubs.length) curSubs.forEach(s=>topics.push({topic:s.name, items:s.items}));
-      }else if(curTopic&&curItems.length && !SKIP_L1.test(curL1||'')){
-        topics.push({topic:curTopic, items:curItems});
-      }
+      if(curSubName!==null && curItems.length){ curSubs.push({name:curSubName, items:curItems}); curItems=[]; }
+      if(curTopic && (curItems.length||curSubs.length)) topics.push({topic:curTopic, items:curItems, subs:curSubs});
+      else if(!curTopic && curSubs.length) curSubs.forEach(s=>topics.push({topic:s.name, items:s.items}));
       // 无话题标题时也保留
-      if(!curTopic && curItems.length && !(IS_CS && SKIP_L1.test(curL1||''))) topics.push({topic:'知识点', items:curItems});
+      if(!curTopic && curItems.length) topics.push({topic:'知识点', items:curItems});
 
       if(topics.length){
         // v2.3.7：候选池门槛由「≥5 条」下调为「≥2 条」。
@@ -7600,7 +7590,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.3.29';
+const APP_VERSION='v2.3.32';
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
