@@ -530,7 +530,8 @@ function feishuLooksEmpty(html, text) {
 }
 
 /** 抓取飞书文档，返回 {ok,title,content,error} */
-async function fetchFeishu(target) {
+async function fetchFeishu(target, opts) {
+  opts = opts || {};
   let u;
   try {
     u = new URL(target);
@@ -541,6 +542,21 @@ async function fetchFeishu(target) {
     return { ok: false, error: '只支持飞书文档链接（feishu.cn / larksuite.com）' };
   }
   if (!/^https?:$/.test(u.protocol)) return { ok: false, error: '只支持 http(s) 链接' };
+
+  /* 【v2.3.34 首选】开放平台 API —— 网页 SSR 只内联前 ~240 块，长文档后半段抓不到；
+     配了飞书应用就走官方分页接口，能取全。失败/未配置再回退网页抓取。 */
+  let openApiErr = '';
+  const appId = String(opts.appId || '').trim();
+  const appSecret = String(opts.appSecret || '').trim();
+  if (appId && appSecret) {
+    try {
+      const viaApi = await fetchFeishuViaOpenApi(target, { appId, appSecret });
+      if (viaApi && viaApi.ok) return viaApi;
+      openApiErr = (viaApi && viaApi.error) || '';
+    } catch (e) {
+      openApiErr = String((e && e.message) || e);
+    }
+  }
 
   let html = '';
   try {
@@ -601,10 +617,215 @@ async function fetchFeishu(target) {
     return {
       ok: false,
       error:
-        '文档没有匿名阅读权限（或链接失效）。请在飞书里把该文档设为「互联网上获得链接的人可阅读」，再重新抓取。',
+        (openApiErr ? ('飞书应用抓取失败：' + openApiErr + '；') : '') +
+        '网页抓取也没拿到内容（多为该文档未开匿名阅读）。请在飞书里把文档设为「互联网上获得链接的人可阅读」，或按设置页说明配置飞书应用后重试。',
     };
   }
-  return { ok: true, title, content, source };
+  /* v2.3.34：网页 SSR 只内联前 ~240 块，长文档会「截断」。
+     带出 truncated 标记，让前端明确提示用户，而不是默默给出半截内容。 */
+  const truncated = /"has_more"\s*:\s*true/.test(html);
+  return { ok: true, title, content, source, truncated, openApiErr };
+}
+
+/* ---------- v2.3.34：飞书开放平台 API（彻底抓全文档） ----------
+
+   背景（为什么必须换路）：
+   网页版抓取读的是 SSR 内联的 `block_map`，而飞书**只把前 ~240 个块内联进 HTML**，
+   长文档的后半段（如「政治理论」的 `# 四、时政` 整章）根本不在页面里 → 永远抓不到。
+   实测（2026-10-15，1.06MB 完整页面）：block_map 里只有 239 块、3 个一级标题，
+   第 4 章丢失；`?from=/?to=`、docx 直链、手机 UA 全部无效。
+   数据里虽有 `has_more:true` + `next_cursors`，但后续块靠 websocket 增量同步，
+   Function 侧无法复用。
+
+   解法：改走**飞书开放平台官方 API**（分页，一块不落）——
+     1) POST /open-apis/auth/v3/tenant_access_token/internal → tenant_access_token
+     2) wiki 链接先 GET /open-apis/wiki/v2/spaces/get_node?token=… → 换成真实文档 obj_token
+     3) GET /open-apis/docx/v1/documents/{document_id}/blocks?page_size=500&page_token=…
+        按 has_more / page_token 翻页，直到 has_more=false
+     4) 按 children 树拼 Markdown（规则与 blockMapToMarkdown 保持一致，
+        前端既有解析器可原样消费）
+
+   前提（用户在飞书开放平台做一次，详见设置页说明）：
+     · 建「企业自建应用」，开通权限 docx:document:readonly（+ wiki:wiki:readonly）
+     · 发布版本；把应用添加为目标文档/知识库的协作者
+     · App ID / App Secret 填进工作台「设置 → 飞书文档抓取」，
+       或配到 Cloudflare 环境变量 FEISHU_APP_ID / FEISHU_APP_SECRET
+
+   未配置应用时自动回退到原来的网页 SSR 抓取（短文档照常可用）。
+*/
+
+/** block_type → Markdown 标题前缀 */
+const OA_HEADING = { 3: '#', 4: '##', 5: '###', 6: '####', 7: '#####', 8: '######', 9: '#######', 10: '########', 11: '#########' };
+/** block_type → 该块承载文本的字段名 */
+const OA_TEXT_KEY = {
+  1: 'page', 2: 'text', 3: 'heading1', 4: 'heading2', 5: 'heading3', 6: 'heading4',
+  7: 'heading5', 8: 'heading6', 9: 'heading7', 10: 'heading8', 11: 'heading9',
+  12: 'bullet', 13: 'ordered', 14: 'code', 15: 'quote', 17: 'todo', 19: 'callout', 34: 'quote_container',
+};
+
+/** 取一个 block 的纯文本 */
+function oaBlockText(b) {
+  if (!b) return '';
+  let o = OA_TEXT_KEY[b.block_type] ? b[OA_TEXT_KEY[b.block_type]] : null;
+  if (!o || !Array.isArray(o.elements)) {
+    // 兜底：找任意带 elements 的字段（飞书新增块类型时不至于完全读不到）
+    for (const k in b) {
+      if (k === 'block_id' || k === 'parent_id' || k === 'children' || k === 'block_type') continue;
+      const v = b[k];
+      if (v && typeof v === 'object' && Array.isArray(v.elements)) { o = v; break; }
+    }
+  }
+  if (!o || !Array.isArray(o.elements)) return '';
+  return o.elements
+    .map((e) => {
+      if (!e) return '';
+      if (e.text_run && typeof e.text_run.content === 'string') return e.text_run.content;
+      if (e.equation && e.equation.content) return e.equation.content;
+      return '';
+    })
+    .join('');
+}
+
+/** 把开放平台返回的扁平 block 列表按 children 树拼成 Markdown */
+function openApiBlocksToMarkdown(items) {
+  if (!Array.isArray(items) || !items.length) return '';
+  const map = {};
+  for (const b of items) { if (b && b.block_id) map[b.block_id] = b; }
+  let root = null;
+  for (const b of items) { if (b && b.block_type === 1) { root = b; break; } }
+  if (!root) { for (const b of items) { if (b && b.parent_id && !map[b.parent_id]) { root = b; break; } } }
+  if (!root) return '';
+
+  const lines = [];
+  const walked = new Set();
+  function walk(kids, depth) {
+    let orderedNo = 0;
+    for (const cid of (kids || [])) {
+      const b = map[cid];
+      if (!b || walked.has(cid)) continue;
+      walked.add(cid);
+      const t = oaBlockText(b);
+      const sub = Array.isArray(b.children) ? b.children : [];
+      const indent = '  '.repeat(Math.max(0, depth));
+      if (OA_HEADING[b.block_type]) {
+        if (t) lines.push(indent + OA_HEADING[b.block_type] + ' ' + t);
+        walk(sub, depth + 1);
+        continue;
+      }
+      if (b.block_type === 13) {           // 有序列表：同级递增
+        orderedNo += 1;
+        if (t) lines.push(indent + orderedNo + '. ' + t);
+        walk(sub, depth + 1);
+        continue;
+      }
+      if (b.block_type === 12) {           // 无序列表
+        if (t) lines.push(indent + '- ' + t);
+        walk(sub, depth + 1);
+        continue;
+      }
+      if (b.block_type === 27 || b.block_type === 22) {   // 图片 / 分割线：不占文本行
+        walk(sub, depth + 1);
+        continue;
+      }
+      if (t) lines.push(indent + t);
+      walk(sub, depth + 1);
+    }
+  }
+  walk(root.children, 0);
+  return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/** tenant_access_token 模块级缓存（同一 isolate 内复用，省一次往返） */
+const _fsTokCache = {};
+async function getTenantAccessToken(appId, appSecret) {
+  const now = Date.now();
+  const c = _fsTokCache[appId];
+  if (c && c.exp > now + 60000) return c.token;
+  const r = await fetch('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+  });
+  let j = null;
+  try { j = await r.json(); } catch (e) { j = null; }
+  if (!j || j.code !== 0 || !j.tenant_access_token) {
+    throw new Error('飞书应用鉴权失败（' + ((j && (j.msg || j.code)) || '未知') + '）—— 请检查 App ID / App Secret 是否正确');
+  }
+  _fsTokCache[appId] = { token: j.tenant_access_token, exp: now + ((j.expire || 7200) * 1000) };
+  return j.tenant_access_token;
+}
+
+async function feishuApiGet(path, token) {
+  const r = await fetch('https://open.feishu.cn/open-apis' + path, {
+    headers: { Authorization: 'Bearer ' + token },
+  });
+  let j = null;
+  try { j = await r.json(); } catch (e) { j = null; }
+  return j || {};
+}
+
+/** 从链接解析出真实文档 id（wiki 需要先换成 obj_token） */
+async function resolveFeishuDoc(target, token) {
+  let u;
+  try { u = new URL(target); } catch (e) { return { error: '链接格式不正确' }; }
+  const parts = u.pathname.split('/').filter(Boolean);
+  const kind = (parts[0] || '').toLowerCase();
+  const tk = parts[1] || '';
+  if (!tk) return { error: '链接里没有文档标识（应为 /wiki/xxx 或 /docx/xxx）' };
+  if (kind === 'wiki') {
+    const j = await feishuApiGet('/wiki/v2/spaces/get_node?token=' + encodeURIComponent(tk) + '&obj_type=wiki', token);
+    if (j.code !== 0) {
+      return { error: '知识库节点解析失败（' + (j.msg || j.code) + '）—— 请把该应用添加为这个知识库的成员' };
+    }
+    const node = (j.data && j.data.node) || {};
+    return { docId: node.obj_token, objType: node.obj_type, title: node.title || '' };
+  }
+  if (kind === 'docx') return { docId: tk, objType: 'docx', title: '' };
+  if (kind === 'docs' || kind === 'doc') {
+    return { error: '这是旧版文档链接（/docs/），请用文档右上角「分享」复制的链接（/docx/ 或 /wiki/）' };
+  }
+  return { docId: tk, objType: kind, title: '' };
+}
+
+/** 分页读取文档全部块 */
+async function listAllFeishuBlocks(docId, token) {
+  const out = [];
+  let pageToken = '';
+  for (let i = 0; i < 60; i++) {                 // 最多 60 页 × 500 = 3 万块，足够
+    const q = '/docx/v1/documents/' + encodeURIComponent(docId)
+      + '/blocks?page_size=500&document_revision_id=-1'
+      + (pageToken ? ('&page_token=' + encodeURIComponent(pageToken)) : '');
+    const j = await feishuApiGet(q, token);
+    if (j.code !== 0) {
+      return { error: '读取文档块失败（' + (j.msg || j.code) + '）—— 请把该应用添加为这份文档的协作者' };
+    }
+    const d = j.data || {};
+    for (const b of (d.items || [])) out.push(b);
+    if (!d.has_more) break;
+    pageToken = d.page_token || '';
+    if (!pageToken) break;
+  }
+  return { items: out };
+}
+
+/** 走开放平台 API 抓取（能取全）；失败返回 {ok:false,error} */
+async function fetchFeishuViaOpenApi(target, cred) {
+  const token = await getTenantAccessToken(cred.appId, cred.appSecret);
+  const t = await resolveFeishuDoc(target, token);
+  if (t.error) return { ok: false, error: t.error };
+  if (t.objType && t.objType !== 'docx') {
+    return { ok: false, error: '该链接指向「' + t.objType + '」类型文档，目前只支持新版文档（docx）' };
+  }
+  const res = await listAllFeishuBlocks(t.docId, token);
+  if (res.error) return { ok: false, error: res.error };
+  const md = openApiBlocksToMarkdown(res.items);
+  if (!md || md.length < 10) return { ok: false, error: '文档内容为空（或该应用看不到任何块）' };
+  let title = t.title || '';
+  if (!title) {
+    const root = (res.items || []).find((b) => b && b.block_type === 1);
+    if (root) title = oaBlockText(root);
+  }
+  return { ok: true, title: title || '', content: md, source: 'openapi', blockCount: (res.items || []).length };
 }
 
 /* ---------- 入口 ---------- */
@@ -620,15 +841,32 @@ function json(body, status = 200) {
   });
 }
 
-export async function onRequestGet({ request }) {
+export async function onRequestGet({ request, env }) {
   const qs = new URL(request.url).searchParams;
 
   // 飞书文档抓取：GET /api/feishu?url=<encoded feishu url>
   const feishuUrl = qs.get('url');
   if (feishuUrl && /feishu\.cn|larksuite\.com/i.test(feishuUrl)) {
-    const res = await fetchFeishu(feishuUrl);
+    // v2.3.34：飞书应用凭证 —— 优先请求头（在设置页里填的），其次 Cloudflare 环境变量
+    const h = request.headers;
+    let appId = (h.get('x-fs-appid') || '').trim();
+    let appSecret = (h.get('x-fs-secret') || '').trim();
+    if ((!appId || !appSecret) && env) {
+      if (env.FEISHU_APP_ID && env.FEISHU_APP_SECRET) {
+        appId = String(env.FEISHU_APP_ID);
+        appSecret = String(env.FEISHU_APP_SECRET);
+      }
+    }
+    const res = await fetchFeishu(feishuUrl, { appId, appSecret });
     if (!res.ok) return json({ ok: false, error: res.error }, 200);
-    return json({ ok: true, title: res.title || '', content: res.content });
+    return json({
+      ok: true,
+      title: res.title || '',
+      content: res.content,
+      source: res.source || '',
+      truncated: !!res.truncated,
+      openApiError: res.openApiErr || '',
+    });
   }
 
   const src = (qs.get('src') || '').toLowerCase();
