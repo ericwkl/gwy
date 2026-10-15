@@ -450,7 +450,7 @@ function loadDB(){
       errorEbb:{},         // 错题复习状态 {id:{base,next,done,times}}；v2.3.12 起：每周一次，点已掌握即毕业
       mistakeEbb:{},       // 易错考点艾宾浩斯复习状态（仍是 5 轮体系，勿与错题混用）
       kbCats:[...KB_CATS],
-      settings:{lastPush:'',pushMarks:{}},
+      settings:{lastPush:'',pushMarks:{},feishuAppId:'',feishuAppSecret:''},
       pushHistory:[],      // 推送历史
       studyProgress:[],    // 刷题进度 {id,module,sub,book,status,note,date}
       deletedIds:{},       // 墓碑：各模块已删除记录的 id（{mistakes:[id], errors:[id], ...}），同步时云端/本地都剔除，防止"删了又被同步回来"（v2.1.80）
@@ -4892,7 +4892,8 @@ async function renderAccu(){
   const seed=getAccuSeed();
   // v2.2.57：缓存带版本号——解析/渲染逻辑升级时手动+1，强制旧版本渲染的缓存 HTML 失效，
   // 防止跨版本复用旧缓存（如 v2.2.55 渲染的【莫此】拆词 HTML 在 v2.2.56 下继续命中）
-  const ACCU_CACHE_VER=25;  // v2.3.32：言语解析器修「分类标题误判」+ 每日条数 12→30 → 词条集合与展示量都变。
+  const ACCU_CACHE_VER=26;  // v2.3.33：政治理论一级标题判定放宽（支持 `# 1. xxx` 形式）→ 话题结构变。
+                            // v2.3.32：言语解析器修「分类标题误判」+ 每日条数 12→30 → 词条集合与展示量都变。
                             // v2.3.31：常识「广东省情」取消屏蔽 → 常识 7 → 8 个话题，旧缓存必须失效。
                             // v2.3.30：常识改为与政治理论同粒度（`#` 一级 = 轮转单位，`##`/`###` = 子话题）
                             // → 常识由 12 话题（法律拆6）变为 7 话题，旧缓存必须失效。
@@ -5253,14 +5254,20 @@ async function renderAccu(){
              只认 `#` 一级（lvl===1）与无 `#` 的中文序号行；`## （一）` 交给下面的二级分支。 */
           const hLvl=(raw.trim().match(/^(#{1,6})\s+/)||[])[1];
           const hLvlDepth=hLvl?hLvl.length:0;
-          if(/^[一二三四五六七八九十]+[、，]/.test(line) && (hLvlDepth===0||hLvlDepth===1)){
+          /* v2.3.33：一级标题判定放宽 —— 用户给第 2 份政治理论补上了 `# 1. 就业与社会治理`
+             这类标题（`#` + 阿拉伯数字编号），但原判定只认「中文序号 + 、/，」，
+             导致 22 个模块标题全部没被识别 → 整份塌成一个叫「知识点」的话题。
+             新判定：**任何 `#` 一级标题**都算轮转单位；或「无 `#` 的中文序号行」（老数据兼容）。
+             实测其余文档（常识 8 个、政治理论① 4 个、言语 5 个）的 `#` 一级标题本来就是大类名，零影响。 */
+          if(hLvlDepth===1 || (/^[一二三四五六七八九十]+[、，]/.test(line) && hLvlDepth===0)){
             /* v2.3.30：`#` 一级标题 = **轮转单位**（常识与政治理论同规则）。
                进入新大类前，先结算上一个大类（含其未收尾的子话题）。 */
             if(curItem){ curItems.push(curItem); curItem=null; }
             if(curSubName!==null && curItems.length){ curSubs.push({name:curSubName, items:curItems}); curItems=[]; }
             if(curTopic && (curItems.length||curSubs.length)) topics.push({topic:curTopic, items:curItems, subs:curSubs});
             curSubName=null; curSubs=[];
-            curL1=line.replace(/^[一二三四五六七八九十]+[、，]\s*/,'').trim();
+            /* v2.3.33：话题名再去掉阿拉伯数字编号前缀（「1. 就业与社会治理」→「就业与社会治理」） */
+            curL1=line.replace(/^[一二三四五六七八九十]+[、，]\s*/,'').replace(/^\d+[.、]\s*/,'').trim();
             curTopic=curL1; curItems=[]; curIndent=-1;
             continue;
           }
@@ -5560,7 +5567,13 @@ const FEISHU_PROXIES = [
 ];
 /* 公共抓取：返回 {title, content}；失败返回 null（私有文档需登录无法绕过） */
 async function fetchFeishuContent(url){
-  let html=null, ok=false, title='', content='';
+  let html=null, ok=false, title='', content='', meta={};
+  /* v2.3.34：带上设置页填的飞书应用凭证（App ID / App Secret）——
+     抓取端会优先走飞书**官方 API**分页取全文（网页版只内联前 ~240 块，长文档会残缺）；
+     没填则自动退回原来的网页抓取。 */
+  const fsId=((DB.settings&&DB.settings.feishuAppId)||'').trim();
+  const fsSec=((DB.settings&&DB.settings.feishuAppSecret)||'').trim();
+  const fsHeaders=(fsId&&fsSec)?{'x-fs-appid':fsId,'x-fs-secret':fsSec}:undefined;
   const candidates=[
     // 首选：同源 Cloudflare Function（v2.3.10 已把飞书抓取搬进来，不再依赖外部代理）
     (u)=>'/api/feishu?url='+encodeURIComponent(u),
@@ -5572,14 +5585,18 @@ async function fetchFeishuContent(url){
   ];
   // 前两个候选：直接返回 JSON（news_proxy / 其他专用代理）
   for(let i=0;i<candidates.length;i++){
+    const target=candidates[i](url);
     try{
-      const resp=await fetch(candidates[i](url), {signal:AbortSignal.timeout(15000)});
+      const isSameOrigin=target.indexOf('/api/feishu')===0;
+      const resp=await fetch(target, {signal:AbortSignal.timeout(25000), headers:isSameOrigin?fsHeaders:undefined});
       if(!resp.ok) continue;
       const ct=resp.headers.get('content-type')||'';
-      if(ct.includes('json') || candidates[i](url).includes('/api/feishu')){
+      if(ct.includes('json') || target.includes('/api/feishu')){
         const j=await resp.json();
         if(j&&j.ok){
-          title=j.title||''; content=j.content||''; ok=true; break;
+          title=j.title||''; content=j.content||''; ok=true;
+          meta={source:j.source||'', truncated:!!j.truncated, openApiError:j.openApiError||''};
+          break;
         }
         if(j&&j.error){ return {ok:false, error:j.error}; }
       }else{
@@ -5601,7 +5618,15 @@ async function fetchFeishuContent(url){
     }
   }
   if(!ok || content.length<20) return null;
-  return {title, content};
+  return {title, content, ...meta};
+}
+/* v2.3.34：抓取结果来源提示（官方 API / 网页截断 / 应用配置出错） */
+function feishuSourceTip(r){
+  if(!r) return '';
+  if(r.source==='openapi') return '　·　来源：飞书官方 API（<b>内容完整</b>）';
+  if(r.openApiError) return '<br>⚠️ 飞书应用抓取失败：'+escapeHtml(r.openApiError)+'（已退回网页抓取）';
+  if(r.truncated) return '<br>⚠️ 文档较长，网页只加载了前面一部分（<b>内容可能不全</b>）—— 建议到「设置 → 飞书应用」配置后重抓';
+  return '';
 }
 async function importFeishu(){
   const url=document.getElementById('kb_feishu_url').value.trim();
@@ -5623,7 +5648,7 @@ async function importFeishu(){
   }
   if(r.title) document.getElementById('kb_title').value=r.title;
   document.getElementById('kb_content').value=r.content;
-  status.textContent='✅ 抓取成功！已填入标题和内容（'+r.content.length+'字），请检查后保存';
+  status.innerHTML='✅ 抓取成功！已填入标题和内容（'+r.content.length+'字）'+feishuSourceTip(r)+'，请检查后保存';
   status.style.color='var(--primary)';
   toast('飞书文档已导入');
 }
@@ -5646,7 +5671,7 @@ async function importFeishuToSettings(){
     status.style.color='var(--danger)';
     return;
   }
-  status.textContent='✅ 抓取成功！正在打开编辑弹窗...';
+  status.innerHTML='✅ 抓取成功！正在打开编辑弹窗...'+feishuSourceTip(r);
   status.style.color='var(--primary)';
   // 打开新增弹窗并预填内容
   const accuMap=ACCU_CATS.find(a=>a.display===kbCat);
@@ -5670,6 +5695,29 @@ async function importFeishuToSettings(){
       <button class="btn btn-outline" style="flex:1" onclick="closeModal()">取消</button>
       <button class="btn" style="flex:1" onclick="saveKB('')">保存</button>
     </div>`);
+}
+/* v2.3.34：保存飞书应用凭证（存 DB.settings，抓取时随请求头带给抓取端） */
+function saveFeishuApp(){
+  const id=(document.getElementById('fsAppId').value||'').trim();
+  const sec=(document.getElementById('fsAppSecret').value||'').trim();
+  const s=document.getElementById('fsAppStatus');
+  if((id&&!sec)||(!id&&sec)){
+    s.textContent='⚠️ App ID 和 App Secret 需要一起填';
+    s.style.color='var(--danger)';
+    return;
+  }
+  DB.settings.feishuAppId=id;
+  DB.settings.feishuAppSecret=sec;
+  saveDB();
+  if(id){
+    s.textContent='✅ 已保存（下次抓取走官方接口，能抓全文）';
+    s.style.color='var(--primary)';
+    toast('飞书应用已保存');
+  }else{
+    s.textContent='已清空（长文档只能抓到前面一段）';
+    s.style.color='var(--text-soft)';
+    toast('已清空飞书应用配置');
+  }
 }
 function saveKB(id){
   // v2.2.76：包 try/catch——之前 saveDB 写 localStorage 失败（如配额满）会静默中断，
@@ -5961,6 +6009,23 @@ function renderSettings(){
           <button class="btn btn-outline" style="flex:1" onclick="importFeishuToSettings()">抓取</button>
         </div>
         <div id="kb_feishu_status_settings" style="font-size:11px;color:var(--text-soft);margin-top:4px;">支持 feishu.cn / larksuite.com 文档链接，自动抓取正文</div>
+        <div style="margin-top:10px;padding:9px 10px;background:var(--bg-soft);border-radius:9px;">
+          <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:3px;">🔐 飞书应用（长文档必配）</div>
+          <div style="font-size:11px;color:var(--text-light);line-height:1.65;margin-bottom:7px;">
+            飞书网页版一次只加载文档前 <b>~240 块</b>，所以长文档（如「政治理论」）用链接抓取会<b>缺后半截</b>。<br>
+            填了下面两项后，抓取改走<b>飞书官方接口分页取全文</b>，一块不落。<br>
+            <b>三步拿到：</b>① 打开 open.feishu.cn → 开发者后台 → 创建「企业自建应用」；
+            ② 「权限管理」开通 <code>docx:document:readonly</code>（知识库文档再加 <code>wiki:wiki:readonly</code>），
+            再到「版本管理与发布」创建并发布版本；
+            ③ 把 App ID / App Secret 填到下面，并在这份文档的<b>分享</b>里把该应用加为「可阅读」（知识库则在成员管理里加）。
+          </div>
+          <input id="fsAppId" placeholder="App ID（cli_ 开头）" value="${escapeHtml((DB.settings&&DB.settings.feishuAppId)||'')}" style="font-size:12px;margin-bottom:4px;">
+          <input id="fsAppSecret" type="password" placeholder="App Secret" value="${escapeHtml((DB.settings&&DB.settings.feishuAppSecret)||'')}" style="font-size:12px;margin-bottom:6px;">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <button class="btn btn-sm btn-outline" onclick="saveFeishuApp()">保存</button>
+            <span id="fsAppStatus" style="font-size:11px;color:var(--text-soft);">${(DB.settings&&DB.settings.feishuAppId&&DB.settings.feishuAppSecret)?'✅ 已配置（抓取走官方接口，内容完整）':'未配置（长文档用链接抓取会缺后面一段）'}</span>
+          </div>
+        </div>
       </div>
     </div>
     <div class="card">
@@ -7590,7 +7655,10 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.3.32';
+const APP_VERSION='v2.3.34';
+/* v2.3.34：飞书应用凭证来自「设置 → 飞书应用」（存 DB.settings，随云端同步）。
+   ⚠️ 切勿把它明文写进本文件：① 本页源码是公开的；② GitHub 的 secret scanning
+   会直接拒绝含 LARK_APP_SECRET 的推送（实测 409 Secret detected in content）。 */
 function init(){
   loadDB();
   const avb=document.getElementById('appVersionBadge'); if(avb) avb.textContent=APP_VERSION;
