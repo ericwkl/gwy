@@ -4915,11 +4915,40 @@ function renderSettingsKBList(){
 /* 积累页：每日随机展示知识库内容 + 时政实时新闻（类似推送页风格） */
 /* 缓存机制：同一天+同一刷新次数内，直接用缓存的HTML，不再重新渲染/抓取新闻。
    只有点"换一批"（accuRefresh）或新一天才会清除缓存重新渲染。 */
+/* v2.3.37：保护积累页 <details> 的展开状态。
+   起因（用户）：「看着看着大作文素材突然显示同步数据，把我展开的内容又折叠回去」——
+   同步拉取结束后会 renderPage 整页重渲染，而 <details> 的 open 只是 DOM 状态、不持久，
+   一重渲染就回到默认折叠。这里在替换 innerHTML 前后各抓/放一次，
+   按「位置 + 摘要文本」双匹配（位置优先，位置变了再按文本找）。 */
+function captureAccuDetails(){
+  const out=[];
+  document.querySelectorAll('#page-accu details').forEach(d=>{
+    const s=d.querySelector('summary');
+    out.push({k:(s?s.textContent:'').trim(), open:!!d.open});
+  });
+  return out;
+}
+function restoreAccuDetails(st){
+  if(!st || !st.length) return;
+  document.querySelectorAll('#page-accu details').forEach((d,i)=>{
+    const s=d.querySelector('summary');
+    const k=(s?s.textContent:'').trim();
+    const hit=(st[i] && st[i].k===k) ? st[i] : st.find(x=>x.k===k);
+    if(hit) d.open=hit.open;
+  });
+}
+function setAccuHtml(el, html){
+  if(!el){ return; }
+  const st=captureAccuDetails();
+  el.innerHTML=html;
+  restoreAccuDetails(st);
+}
 async function renderAccu(){
   const seed=getAccuSeed();
   // v2.2.57：缓存带版本号——解析/渲染逻辑升级时手动+1，强制旧版本渲染的缓存 HTML 失效，
   // 防止跨版本复用旧缓存（如 v2.2.55 渲染的【莫此】拆词 HTML 在 v2.2.56 下继续命中）
-  const ACCU_CACHE_VER=27;  // v2.3.36：轮转卡改为「固定顺序 + 顺移一格」（修刷新重复），选中结果变 → 旧缓存失效。  // v2.3.33：政治理论一级标题判定放宽（支持 `# 1. xxx` 形式）→ 话题结构变。
+  const ACCU_CACHE_VER=28;  // v2.3.38：编号行识别放宽（2 字标题不再漏编号）→ 条目文本变，旧缓存失效。
+                            // v2.3.36：轮转卡改为「固定顺序 + 顺移一格」（修刷新重复），选中结果变 → 旧缓存失效。  // v2.3.33：政治理论一级标题判定放宽（支持 `# 1. xxx` 形式）→ 话题结构变。
                             // v2.3.32：言语解析器修「分类标题误判」+ 每日条数 12→30 → 词条集合与展示量都变。
                             // v2.3.31：常识「广东省情」取消屏蔽 → 常识 7 → 8 个话题，旧缓存必须失效。
                             // v2.3.30：常识改为与政治理论同粒度（`#` 一级 = 轮转单位，`##`/`###` = 子话题）
@@ -4957,7 +4986,7 @@ async function renderAccu(){
   // 旧版本（ver<=10）的缓存无此字段，一律视为不可信、不命中，避免继续复用它锁死时评卡。
   if(DB.accuHtmlCache && DB.accuHtmlCache.ver===ACCU_CACHE_VER && DB.accuHtmlCache.seed===seed && DB.accuHtmlCache.kbSig===kbSig && DB.accuHtmlCache.html && DB.accuHtmlCache.newsOk!==false){
     const el=document.getElementById('page-accu');
-    if(el){ el.innerHTML=DB.accuHtmlCache.html; return; }
+    if(el){ setAccuHtml(el, DB.accuHtmlCache.html); return; }
   }
   const catIcons={'常识':'🌐','政治理论':'🏛️','扩展资料':'📚','每日时政':'📰','言语素材':'💬','申论素材':'📝','面试':'🎤'};
   let cards='';
@@ -5043,8 +5072,10 @@ async function renderAccu(){
               tzCur=m2[1].trim(); tzItems=[];
               continue;
             }
-            const m3=line.match(/^\d+[\.、]\s*(.+)$/);
-            if(m3 && m3[1].length>=3){
+            /* v2.3.38：同常识/政治理论——编号后**只要还有字**就切条；
+               `(?=\D)` 挡掉「1.5倍」这类小数（否则会被切成「5倍」）。 */
+            const m3=line.match(/^\d+[\.、]\s*(?=\D)(.+)$/);
+            if(m3){
               if(tzCurItem){ tzItems.push(tzCurItem); }
               tzCurItem=m3[1].trim();
               continue;
@@ -5357,8 +5388,15 @@ async function renderAccu(){
             continue;
           }
           // 编号内容行：1. xxx / 1、 xxx → 新知识点（无缩进时的 v2.2.96 行为）
-          const m3=line.match(/^\d+[\.、]\s*(.+)$/);
-          if(m3 && m3[1].length>=3){
+          /* v2.3.38：编号行识别放宽 —— 原阈值 `m3[1].length>=3` 会让**标题只有 2 个字**的
+             编号行漏网，编号连同点号原样留在正文里（用户：「这个99又是什么」）。
+             实测常识库 3 条命中：`99. 党史` / `67. 新法` / `122. 区位`；
+             它们进不了本分支，就掉进下面的「无缩进兜底」，`curItem` 被直接赋成整行
+             `"99. 党史"` —— 于是正文首行带着编号，和别的条目画风不一致。
+             现改为：编号后**只要还有字**就切条，编号一律剥掉。
+             `(?=\D)` 是防「1.5倍」「2026.10.19」这类小数/日期被误切（否则会剩「5倍」）。 */
+          const m3=line.match(/^\d+[\.、]\s*(?=\D)(.+)$/);
+          if(m3){
             if(curItem){ curItems.push(curItem); }
             curItem=m3[1].trim();
             curIndent=indent;
@@ -5486,7 +5524,7 @@ async function renderAccu(){
       <div style="font-size:11px;color:var(--text-light);margin:-4px 0 8px;">每日从知识库随机展示积累内容 · 点击换一批刷新</div>
     </div>
     ${cards}`;
-  document.getElementById('page-accu').innerHTML=accuHtml;
+  setAccuHtml(document.getElementById('page-accu'), accuHtml);
   // 缓存渲染结果（同一天+同一刷新次数+知识库不变时不重新渲染）
   // v2.2.85：newsOk=false（时评三源本次全空）时不落缓存——否则"缺时评卡"的 HTML 被锁死，
   // 当天内怎么刷新页面都只会复用旧缓存、不再抓新闻，时评卡就一直不出现（用户反馈的现象）。
@@ -7688,7 +7726,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.3.36';
+const APP_VERSION='v2.3.38';
 /* v2.3.34：飞书应用凭证来自「设置 → 飞书应用」（存 DB.settings，随云端同步）。
    ⚠️ 切勿把它明文写进本文件：① 本页源码是公开的；② GitHub 的 secret scanning
    会直接拒绝含 LARK_APP_SECRET 的推送（实测 409 Secret detected in content）。 */
@@ -8485,8 +8523,33 @@ function mergeObjFields(cur, x){
   return out;
 }
 
+/* v2.3.37：同步后「内容是否真的有变化」的轻量签名。
+   用途：无变化时**不弹提示、不重渲染** —— 否则后台轮询会在用户阅读积累页时反复整页重绘，
+   把展开的 <details> 打回折叠（用户：「看着看着突然显示同步数据，把我展开的内容又折叠回去」）。
+   只统计各模块的条数 + 最大 updatedAt，不 stringify 全量数据。 */
+function _dbContentSig(){
+  try{
+    const arrSig = (a) => {
+      if(!Array.isArray(a)) return '-';
+      let mx = 0;
+      for(const x of a){ if(!x) continue; const t = x.updatedAt || x.ts || 0; if(t > mx) mx = t; }
+      return a.length + ':' + mx;
+    };
+    const objLen = (o) => (o && typeof o === 'object') ? Object.keys(o).length : 0;
+    return [
+      arrSig(DB.knowledge), arrSig(DB.papers), arrSig(DB.mistakes), arrSig(DB.errors),
+      arrSig(DB.reviews), arrSig(DB.records), arrSig(DB.tasks), arrSig(DB.exams),
+      arrSig(DB.schedule), arrSig(DB.weekTasks), arrSig(DB.studyProgress), arrSig(DB.pushHistory),
+      (DB.kbCats || []).length,
+      objLen(DB.mistakeEbb), objLen(DB.errorEbb), objLen(DB.studyCheckins), objLen(DB.sportCheckins),
+      objLen(DB.tomatoModStats), objLen(DB.deletedIds),
+    ].join('|');
+  }catch(e){ return ''; }
+}
+
 async function _syncPullAndMergeInner(){
   if(!supabaseClient) return;
+  let _sigBefore = '';
   try{
     setSyncState('syncing');
     const { data, error } = await supabaseClient
@@ -8505,6 +8568,7 @@ async function _syncPullAndMergeInner(){
     // v2.1.81 修复 SYNC-001：isEmptyLocal 已在此处不再使用，syncPush 中的版本已补全 reviews/studyProgress
     try{
       const backup = JSON.stringify(DB);
+      _sigBefore = _dbContentSig();
       localStorage.setItem('gk_workbench_v1_local_backup_' + getSyncKey(), backup);
     }catch(e){}
     const cloud = data.data || {};
@@ -8550,12 +8614,18 @@ async function _syncPullAndMergeInner(){
     localStorage.setItem(STORAGE_KEY, JSON.stringify(DB));
     setSyncState('connected');
     updateSyncBadge();
-    toast('已同步合并（本地+云端数据都保留）');
+    /* v2.3.37：内容没变就静默 —— 不 toast、不重渲染，避免打断阅读 / 把展开的折叠块打回原状 */
+    const _changed = _dbContentSig() !== _sigBefore;
+    if(_changed){
+      toast('已同步合并（本地+云端数据都保留）');
+    }
     // 合并后立即推送合并结果上云（保证本地的复习状态/周计划勾选/新记录等同步出去）
     try{ await syncPush(); }catch(e){}
-    // 重新渲染当前页面
-    const cur = document.querySelector('.page.active')?.id?.replace('page-','') || 'home';
-    renderPage(cur);
+    // 仅在内容确有变化时刷新当前页
+    if(_changed){
+      const cur = document.querySelector('.page.active')?.id?.replace('page-','') || 'home';
+      renderPage(cur);
+    }
   }catch(e){
     setSyncState('error');
     console.warn('[Supabase pull]', e && e.message);
