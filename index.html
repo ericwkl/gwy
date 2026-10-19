@@ -4179,12 +4179,18 @@ function renderModuleTrendCharts(){
    ============================================================ */
 let paperChart=null;
 let paperFilter='全部'; // 全部/模考/真题
+let paperKind='';       // v2.3.35 细分筛选：模考=国考/广东省考；真题=卷别（县级卷/乡镇卷…）
 function renderPaper(){
   const all=[...DB.papers].sort((a,b)=>b.date.localeCompare(a.date));
-  const list=paperFilter==='全部'?all:all.filter(p=>p.type===paperFilter);
-  // 分类统计（v2.2.28：模考按类型细分 国考/广东省考）
+  let list=paperFilter==='全部'?all:all.filter(p=>p.type===paperFilter);
+  /* v2.3.35：按「卷别」细分筛选（用户：「真题有的是广东县级卷有的是乡镇卷」）。
+     模考看 examType（国考/广东省考），真题看 kind（广东省考·县级卷 等，旧数据无 kind 归「其他」）。 */
+  if(paperKind){
+    list=list.filter(p=>(p.type==='真题'? (p.kind||'其他') : (p.examType||''))===paperKind);
+  }
+  // 分类统计（v2.3.35：跟随当前筛选结果统计，选「真题·县级卷」就只看这一类的平均分）
   const statByType={};
-  all.forEach(p=>{
+  list.forEach(p=>{
     const t=(p.type==='模考'&&p.examType)?('模考·'+p.examType):(p.type||'模考');
     if(!statByType[t]) statByType[t]={count:0,scoreSum:0,rateSum:0,rateCount:0};
     statByType[t].count++;
@@ -4220,7 +4226,7 @@ function renderPaper(){
     const rate=tt>0?Math.round(tc/tt*100)+'%':'';
     const totalDur = p.duration || td;
     const typeBadge=p.type==='真题'
-      ?'<span style="font-size:10px;padding:1px 6px;border-radius:6px;background:var(--accent-soft);color:var(--accent);margin-left:6px;">真题</span>'
+      ?`<span style="font-size:10px;padding:1px 6px;border-radius:6px;background:var(--accent-soft);color:var(--accent);margin-left:6px;">真题${p.kind?' · '+p.kind:''}</span>`
       :`<span style="font-size:10px;padding:1px 6px;border-radius:6px;background:var(--primary-soft);color:var(--primary);margin-left:6px;">模考${p.examType?'·'+p.examType:''}</span>`;
     return `<div class="paper-item">
       <div class="p-head">
@@ -4240,12 +4246,19 @@ function renderPaper(){
     </div>`;
   }).join(''):'<div class="empty-state"><div class="emoji">📝</div><div class="txt">暂无试卷记录</div></div>';
   const tabs=['全部','模考','真题'].map(t=>`<span class="tag ${paperFilter===t?'on':''}" onclick="setPaperFilter('${t}')">${t}</span>`).join('');
+  /* v2.3.35：二级筛选（按卷别细分）—— 只在选中「模考」/「真题」时出现 */
+  const kindList = paperFilter==='模考' ? PAPER_EXAM_TYPES
+                 : paperFilter==='真题' ? PAPER_KINDS : [];
+  const kindTabs = kindList.length
+    ? `<div class="tag-list" style="margin-top:-2px;">${[''].concat(kindList).map(k=>`<span class="tag ${paperKind===k?'on':''}" onclick="setPaperKind('${k}')">${k||'全部'}</span>`).join('')}</div>`
+    : '';
   document.getElementById('page-paper').innerHTML=`
     <div class="card">
       <div class="card-title"><span class="left"><span class="emoji">📝</span>试卷分析</span>
         <button class="btn btn-sm" onclick="paperModal()">+ 新增</button></div>
-      ${all.length?`<div style="display:flex;gap:8px;margin-bottom:10px;">${statHtml}</div>`:''}
+      ${all.length?`<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">${statHtml}</div>`:''}
       <div class="tag-list">${tabs}</div>
+      ${kindTabs}
       ${listHtml}
     </div>
     ${all.length?`<div class="card">
@@ -4255,7 +4268,8 @@ function renderPaper(){
     </div>`:''}`;
   if(all.length) renderPaperChart();
 }
-function setPaperFilter(t){ paperFilter=t; renderPaper(); }
+function setPaperFilter(t){ paperFilter=t; paperKind=''; renderPaper(); }
+function setPaperKind(k){ paperKind=k; renderPaper(); }
 function renderPaperChart(){
   // v2.2.28：按模考类型分色（国考绿/广东省考蓝/真题橙），各线按考试日期轴对齐；
   // 旧模考（无类型）不单独成线，编辑补选类型后自动进入对应曲线
@@ -4285,6 +4299,9 @@ function renderPaperChart(){
 }
 const PAPER_TYPES=['模考','真题'];
 const PAPER_EXAM_TYPES=['国考','广东省考']; // v2.2.28 模考类型（国考/广东省考），曲线分色显示
+/* v2.3.35：真题卷别（用户：「真题有的是广东县级卷有的是乡镇卷」）。
+   下拉固定这几类 + 其他；旧数据没有该字段 → 筛选时归「其他」。 */
+const PAPER_KINDS=['广东省考·县级卷','广东省考·乡镇卷','国考·副省级','国考·地市级','国考·行政执法','其他'];
 const PAPER_MODULES=['政治理论','常识判断','言语理解','数量关系','判断推理','资料分析']; // v2.2.99：数量关系提到判断推理之前（卡片显示与编辑表单一体统一）
 function paperModal(id){
   paperModalId=id||'';
@@ -4316,6 +4333,10 @@ function paperModal(id){
     <div class="form-row" id="pp_exam_row" style="${isMk?'':'display:none;'}">
       <div class="form-group"><label>模考类型</label><select id="pp_exam_type"><option value="" ${!p||!p.examType?'selected':''}>未选择</option>${PAPER_EXAM_TYPES.map(t=>`<option value="${t}" ${p&&p.examType===t?'selected':''}>${t}</option>`).join('')}</select></div>
       <div class="form-group"><label>考试目标</label><div style="font-size:11px;color:var(--text-light);padding-top:6px;">国考 / 广东省考 分数曲线用不同颜色区分</div></div>
+    </div>
+    <div class="form-row" id="pp_kind_row" style="${isMk?'display:none;':''}">
+      <div class="form-group"><label>卷别</label><select id="pp_kind"><option value="" ${!p||!p.kind?'selected':''}>未选择</option>${PAPER_KINDS.map(t=>`<option value="${t}" ${p&&p.kind===t?'selected':''}>${t}</option>`).join('')}</select></div>
+      <div class="form-group"><label>说明</label><div style="font-size:11px;color:var(--text-light);padding-top:6px;">真题可细分县级卷/乡镇卷/副省级等，试卷分析里能按卷别筛选</div></div>
     </div>
     <div class="form-group">
       <label>各模块做题情况（正确数 / 总数 / 用时，正确率自动计算）</label>
@@ -4358,6 +4379,9 @@ function togglePaperExamType(){
   const row=document.getElementById('pp_exam_row');
   if(!typeSel||!row) return;
   row.style.display=(typeSel.value==='模考')?'':'none';
+  /* v2.3.35：真题显示「卷别」行 */
+  const kindRow=document.getElementById('pp_kind_row');
+  if(kindRow) kindRow.style.display=(typeSel.value==='真题')?'':'none';
   if(typeSel.value!=='模考'){
     const es=document.getElementById('pp_exam_type');
     if(es) es.value='';
@@ -4485,6 +4509,9 @@ function savePaper(id, opts){
   const type=document.getElementById('pp_type').value;
   const examTypeEl=document.getElementById('pp_exam_type');
   const examType=(type==='模考'&&examTypeEl)?examTypeEl.value:'';
+  /* v2.3.35：真题卷别（模考时不存，保持互斥） */
+  const kindEl=document.getElementById('pp_kind');
+  const kind=(type==='真题'&&kindEl)?kindEl.value:'';
   const date=document.getElementById('pp_date').value;
   const note=document.getElementById('pp_note').value.trim();
   if(!date){ toast('请选择日期'); return false; }
@@ -4513,9 +4540,9 @@ function savePaper(id, opts){
   const analysis=(analysisText||analysisUrl)?{text:analysisText,feishuUrl:analysisUrl,updatedAt:todayStr()}:undefined;
   if(id){
     const p=DB.papers.find(x=>x.id===id);
-    Object.assign(p,{name,type,examType,date,score,duration,modules,note,analysis,updatedAt:Date.now()});
+    Object.assign(p,{name,type,examType,kind,date,score,duration,modules,note,analysis,updatedAt:Date.now()});
   }else{
-    DB.papers.push({id:uid(),name,type,examType,date,score,duration,modules,note,analysis,updatedAt:Date.now()});
+    DB.papers.push({id:uid(),name,type,examType,kind,date,score,duration,modules,note,analysis,updatedAt:Date.now()});
   }
   saveDB(); closeModal(); renderPaper(); toast('已保存');
   return true;
@@ -4892,7 +4919,7 @@ async function renderAccu(){
   const seed=getAccuSeed();
   // v2.2.57：缓存带版本号——解析/渲染逻辑升级时手动+1，强制旧版本渲染的缓存 HTML 失效，
   // 防止跨版本复用旧缓存（如 v2.2.55 渲染的【莫此】拆词 HTML 在 v2.2.56 下继续命中）
-  const ACCU_CACHE_VER=26;  // v2.3.33：政治理论一级标题判定放宽（支持 `# 1. xxx` 形式）→ 话题结构变。
+  const ACCU_CACHE_VER=27;  // v2.3.36：轮转卡改为「固定顺序 + 顺移一格」（修刷新重复），选中结果变 → 旧缓存失效。  // v2.3.33：政治理论一级标题判定放宽（支持 `# 1. xxx` 形式）→ 话题结构变。
                             // v2.3.32：言语解析器修「分类标题误判」+ 每日条数 12→30 → 词条集合与展示量都变。
                             // v2.3.31：常识「广东省情」取消屏蔽 → 常识 7 → 8 个话题，旧缓存必须失效。
                             // v2.3.30：常识改为与政治理论同粒度（`#` 一级 = 轮转单位，`##`/`###` = 子话题）
@@ -5121,9 +5148,13 @@ async function renderAccu(){
         }
         // v2.2.43：按天顺序轮转（非随机），保证相邻天展示不同子话题。
         // 原随机抽 1 个（from 31 子话题池）有 ~1/31 相邻重复率，用户反馈"一直看到同一模块"。
-        const slOrder=seededShuffle(grandTopics,20260801+accuCardSeed('申论素材')); // 固定打乱顺序，每日相同；卡刷新时偏移
-        // v2.2.83：卡刷新偏移也并入索引位置——只改打乱顺序不改位置时，若池子较小容易抽回同一条
-        const slIdx=((dayIndexOfToday()+(DB.accuSeedCount||0)+accuCardSeed('申论素材')*7)%slOrder.length+slOrder.length)%slOrder.length;
+        /* v2.3.36：轮转顺序**只由固定种子决定**（当天/刷新都不重排）。
+           原实现把 accuCardSeed 也掺进打乱种子 → 每点一次刷新整池顺序全部重排，同时索引再 +7，
+           两个变量同时变 → 会在几条之间反复撞见同一条（用户：「刷新两次又回到系统思维」）；
+           且步长 7 遇到池大小为 7 的倍数时退化（gcd=7，只能走到 len/7 个位置）。
+           现在：轮转 = 固定顺序上顺移一格 → 刷新必看到下一条，len 次内不重复。 */
+        const slOrder=seededShuffle(grandTopics,20260801);
+        const slIdx=((dayIndexOfToday()+(DB.accuSeedCount||0)+accuCardSeed('申论素材'))%slOrder.length+slOrder.length)%slOrder.length;
         const picked=[slOrder[slIdx]];
         for(const t of picked){
           let sectionHtml='';
@@ -5159,8 +5190,9 @@ async function renderAccu(){
              观感是「每天好几个半截话题」。现：轮转单位 = 1 个分类，落到哪个分类就把它的
              条目**全部展开**（不再抽稀）；卡标题标签显示当前话题名；轮转周期 = 分类数（10 天一轮）。
              卡种子并入 salt/索引，与「↻ 刷新」联动（刷新即换下一个话题）。 */
-          const xtOrder=seededShuffle(xtCats, 20260830+accuCardSeed('申论小题'));
-          const xtIdx=((dayIndexOfToday()+(DB.accuSeedCount||0)+accuCardSeed('申论小题')*7)%xtOrder.length+xtOrder.length)%xtOrder.length;
+          /* v2.3.36：同申论素材——顺序固定，刷新顺移一格（原写法每刷一次整池重排 + 索引跳 7 格） */
+          const xtOrder=seededShuffle(xtCats, 20260830);
+          const xtIdx=((dayIndexOfToday()+(DB.accuSeedCount||0)+accuCardSeed('申论小题'))%xtOrder.length+xtOrder.length)%xtOrder.length;
           const xc=xtOrder[xtIdx];
           const isWN=/万能思维体系/.test(xc);
           const items=xtData[xc];   // v2.3.24：全量展示（原 v2.2.46 的 hier/eg 抽稀逻辑不再需要）
@@ -5388,9 +5420,10 @@ async function renderAccu(){
         const finalPool=pool.length?pool:topics;
         // v2.2.43：话题按天顺序轮转，保证相邻天展示不同话题（避免常识等模块每天撞同一话题）
         // v2.2.83：并入卡级种子——常识卡与政治理论卡共用这段逻辑，卡种子不同则各自独立轮换
-        const tzOrder=seededShuffle(finalPool,20260802+accuCardSeed(cat.display));
+        /* v2.3.36：同上——顺序固定，刷新顺移一格 */
+        const tzOrder=seededShuffle(finalPool,20260802);
         // v2.2.83：索引位置也并入卡种子——只改打乱顺序不改位置时，池子小容易抽回同一条
-        const tzIdx=((dayIndexOfToday()+(DB.accuSeedCount||0)+accuCardSeed(cat.display)*7)%tzOrder.length+tzOrder.length)%tzOrder.length;
+        const tzIdx=((dayIndexOfToday()+(DB.accuSeedCount||0)+accuCardSeed(cat.display))%tzOrder.length+tzOrder.length)%tzOrder.length;
         const t=tzOrder[tzIdx];
         /* v2.3.18：轮到的这个话题**全量展示**，不再抽稀。
            背景（用户反馈「常识还是显示不全啊，人文常识就几条」→「我是说每天显示一个话题的全部内容」）：
@@ -7655,7 +7688,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.3.34';
+const APP_VERSION='v2.3.36';
 /* v2.3.34：飞书应用凭证来自「设置 → 飞书应用」（存 DB.settings，随云端同步）。
    ⚠️ 切勿把它明文写进本文件：① 本页源码是公开的；② GitHub 的 secret scanning
    会直接拒绝含 LARK_APP_SECRET 的推送（实测 409 Secret detected in content）。 */
