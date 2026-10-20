@@ -4180,8 +4180,17 @@ function renderModuleTrendCharts(){
 let paperChart=null;
 let paperFilter='全部'; // 全部/模考/真题
 let paperKind='';       // v2.3.35 细分筛选：模考=国考/广东省考；真题=卷别（县级卷/乡镇卷…）
+/* v2.3.39：分数曲线改为「模考 / 真题」各自成图（用户：「现在都画在一起没有区分度」）。
+   只影响曲线卡，不动列表筛选（paperFilter / paperKind 与曲线互不干扰）。 */
+let paperChartMode='';  // ''=未初始化，按有无数据自动落到「模考」或「真题」
 function renderPaper(){
   const all=[...DB.papers].sort((a,b)=>b.date.localeCompare(a.date));
+  /* v2.3.39：曲线卡模式独立于列表筛选；无对应数据时自动回退，避免出现空图 */
+  const hasMk=all.some(p=>p.type==='模考'), hasZt=all.some(p=>p.type==='真题');
+  if(paperChartMode==='模考' && !hasMk) paperChartMode='真题';
+  if(paperChartMode==='真题' && !hasZt) paperChartMode='模考';
+  if(!paperChartMode) paperChartMode=hasMk?'模考':(hasZt?'真题':'模考');
+  const chartCount=all.filter(p=>p.type===paperChartMode).length;
   let list=paperFilter==='全部'?all:all.filter(p=>p.type===paperFilter);
   /* v2.3.35：按「卷别」细分筛选（用户：「真题有的是广东县级卷有的是乡镇卷」）。
      模考看 examType（国考/广东省考），真题看 kind（广东省考·县级卷 等，旧数据无 kind 归「其他」）。 */
@@ -4262,39 +4271,94 @@ function renderPaper(){
       ${listHtml}
     </div>
     ${all.length?`<div class="card">
-      <div class="card-title"><span class="left"><span class="emoji">📈</span>分数变化曲线</span></div>
+      <div class="card-title"><span class="left"><span class="emoji">📈</span>分数变化曲线</span>
+        <span id="paperChartCount" style="font-size:10px;color:var(--text-light);font-weight:400;">${paperChartMode} ${chartCount}次</span></div>
+      <div class="tag-list" id="paperChartTabs" style="margin-bottom:8px;">
+        ${hasMk?`<span class="tag ${paperChartMode==='模考'?'on':''}" data-mode="模考" onclick="setPaperChartMode('模考')">模考</span>`:''}
+        ${hasZt?`<span class="tag ${paperChartMode==='真题'?'on':''}" data-mode="真题" onclick="setPaperChartMode('真题')">真题</span>`:''}
+      </div>
       <div class="chart-box"><canvas id="paperChart"></canvas></div>
-      <div style="font-size:10px;color:var(--text-light);margin-top:4px;text-align:center;">绿色=国考模考 蓝色=广东省考模考 橙色=真题（按考试日期排序）</div>
+      <div id="paperChartNote" style="font-size:10px;color:var(--text-light);margin-top:4px;text-align:center;">${paperChartMode==='模考'?'绿色=国考 蓝色=广东省考 灰=未标注类型':'绿色=国考真题 蓝色=广东省考真题 灰=未标注卷别'}（按考试日期排序）</div>
     </div>`:''}`;
   if(all.length) renderPaperChart();
 }
 function setPaperFilter(t){ paperFilter=t; paperKind=''; renderPaper(); }
 function setPaperKind(k){ paperKind=k; renderPaper(); }
+/* v2.3.39：曲线卡内的「模考 / 真题」切换 —— 只重画图，不整页重渲染（避免列表滚动位置跳动） */
+function setPaperChartMode(m){
+  if(m && m!==paperChartMode) paperChartMode=m;
+  const tabs=document.getElementById('paperChartTabs');
+  if(tabs) [...tabs.children].forEach(el=>el.classList.toggle('on', el.dataset.mode===m));
+  const cnt=DB.papers.filter(p=>p.type===m).length;
+  const titleCnt=document.getElementById('paperChartCount');
+  if(titleCnt) titleCnt.textContent=m+' '+cnt+'次';
+  const note=document.getElementById('paperChartNote');
+  if(note) note.textContent=(m==='模考'?'绿色=国考 蓝色=广东省考 灰=未标注类型':'绿色=国考真题 蓝色=广东省考真题 灰=未标注卷别')+'（按考试日期排序）';
+  renderPaperChart();
+}
+/* v2.3.39：真题的「考试主体」由卷别前缀推导（广东省考·县级卷 → 广东省考；国考·副省级 → 国考） */
+function paperGroupOf(p){
+  if(p.type==='真题'){
+    const k=p.kind||'';
+    if(k.indexOf('国考')===0) return '国考';
+    if(k.indexOf('广东省考')===0) return '广东省考';
+    return '其他';
+  }
+  return p.examType||'其他';
+}
 function renderPaperChart(){
-  // v2.2.28：按模考类型分色（国考绿/广东省考蓝/真题橙），各线按考试日期轴对齐；
-  // 旧模考（无类型）不单独成线，编辑补选类型后自动进入对应曲线
-  const series=[
-    {key:'国考',      filter:p=>p.type==='模考'&&p.examType==='国考',      color:'#5b8a5a', fill:'rgba(91,138,90,.08)'},
-    {key:'广东省考',  filter:p=>p.type==='模考'&&p.examType==='广东省考',  color:'#4a7bb5', fill:'rgba(74,123,181,.08)'},
-    {key:'真题',      filter:p=>p.type==='真题',                            color:'#c08552', fill:'rgba(192,133,82,.08)'},
-  ].map(s=>{
-    const items=[...DB.papers].filter(s.filter).sort((a,b)=>a.date.localeCompare(b.date));
-    return {key:s.key,color:s.color,fill:s.fill,items};
-  }).filter(s=>s.items.length);
-  const labelOf=p=>p.date.slice(5)+' '+p.name.slice(0,6);
-  const allLabels=[...new Set(DB.papers.map(labelOf))].sort();
+  /* v2.3.39：曲线按「模考 / 真题」分开画（用户：「现在都画在一起没有区分度」）。
+     原因：原来三条线（国考模考/广东省考模考/真题）共用一条 x 轴，且轴上塞了**所有**试卷的
+     「日期+名称」，点数一多就糊成一片；真题只有零星几次，几乎被模考压平。
+     现在：① 曲线卡顶部有「模考 / 真题」切换，一次只看一类；
+           ② x 轴只用当前类别的试卷，按日期排序，点与点之间不再夹杂另一类；
+           ③ 同类里仍按考试主体分色（国考绿 / 广东省考蓝 / 未标注灰），保留区分度。
+     注意：列表筛选（paperFilter/paperKind）与曲线模式互不影响。 */
+  const all=[...DB.papers];
+  const hasMk=all.some(p=>p.type==='模考'), hasZt=all.some(p=>p.type==='真题');
+  if(paperChartMode==='模考' && !hasMk) paperChartMode='真题';
+  if(paperChartMode==='真题' && !hasZt) paperChartMode='模考';
+  if(!paperChartMode) paperChartMode=hasMk?'模考':'真题';
+  const mode=paperChartMode;
+  const items=all.filter(p=>p.type===mode).sort((a,b)=>a.date.localeCompare(b.date));
+  const labels=items.map(p=>p.date.slice(5));
+  const defs=[
+    {key:'国考',   color:'#5b8a5a', fill:'rgba(91,138,90,.08)'},
+    {key:'广东省考',color:'#4a7bb5', fill:'rgba(74,123,181,.08)'},
+    {key:'未标注', color:'#9aa79a', fill:'rgba(154,167,154,.08)'},
+  ];
+  const series=defs.map(d=>{
+    const data=items.map(p=>paperGroupOf(p)===d.key?p.score:null);
+    return {label:d.key,color:d.color,fill:d.fill,data};
+  }).filter(s=>s.data.some(v=>v!==null));
+  /* v2.3.39：y 轴按当前类别的分数区间自适应（0~100 的固定轴会把 55~70 的分段压成一条平线，
+     与「没有区分度」的观感直接相关）；上下各留 5 分余量、取整到 10，仍封顶 100。 */
+  const vals=items.map(p=>Number(p.score)).filter(v=>isFinite(v)&&v>0);
+  let yMin=0, yMax=100;
+  if(vals.length){
+    yMin=Math.max(0,Math.floor((Math.min.apply(null,vals)-5)/10)*10);
+    yMax=Math.min(100,Math.ceil((Math.max.apply(null,vals)+5)/10)*10);
+    if(yMax-yMin<20){ yMax=Math.min(100,yMin+20); }
+  }
   const ctx=document.getElementById('paperChart');
+  if(!ctx) return;
   if(paperChart) paperChart.destroy();
   paperChart=new Chart(ctx,{
     type:'line',
-    data:{labels:allLabels,
-      datasets:series.map(s=>{
-        const byKey={};
-        s.items.forEach(p=>{ byKey[labelOf(p)]=p.score; });
-        return {label:s.key+'分数',data:allLabels.map(l=>byKey[l]!==undefined?byKey[l]:null),
-          borderColor:s.color,backgroundColor:s.fill,fill:true,tension:.3,pointRadius:4,spanGaps:true};
-      })},
-    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'top',labels:{font:{size:9},boxWidth:10,boxHeight:10}}},scales:{y:{beginAtZero:true,max:100,ticks:{font:{size:10}}},x:{ticks:{font:{size:8}}}}}
+    data:{labels,datasets:series.map(s=>({
+      label:s.label,data:s.data,borderColor:s.color,backgroundColor:s.fill,
+      fill:true,tension:.3,pointRadius:4,pointHoverRadius:6,spanGaps:true,borderWidth:2
+    }))},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{
+        legend:{position:'top',labels:{font:{size:10},boxWidth:10,boxHeight:10}},
+        tooltip:{callbacks:{
+          title:(its)=>{ const p=items[its[0].dataIndex]; return p?(p.date+' '+p.name):''; },
+          label:(c)=>`${c.dataset.label}：${c.parsed.y}分`
+        }}
+      },
+      scales:{y:{beginAtZero:true,min:yMin,max:yMax,ticks:{font:{size:10}}},
+              x:{ticks:{font:{size:8},maxRotation:0,autoSkip:true,maxTicksLimit:12}}}}
   });
 }
 const PAPER_TYPES=['模考','真题'];
@@ -7726,7 +7790,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.3.38';
+const APP_VERSION='v2.3.39';
 /* v2.3.34：飞书应用凭证来自「设置 → 飞书应用」（存 DB.settings，随云端同步）。
    ⚠️ 切勿把它明文写进本文件：① 本页源码是公开的；② GitHub 的 secret scanning
    会直接拒绝含 LARK_APP_SECRET 的推送（实测 409 Secret detected in content）。 */
