@@ -848,6 +848,7 @@ function renderTodayMistakeEbb(){
   const today=todayStr();
   const mkts=(DB.mistakes||[]).filter(m=>{const st=getMistakeEbb(m); return !st.done && st.next<=today;});
   if(!mkts.length) return '<div class="empty-state" style="padding:14px;"><div class="emoji">✅</div><div class="txt">今日无待复习考点</div></div>';
+  _mkNavIds=mkts.slice(0,5).map(m=>m.id); // v2.3.41：主页只展示前 5 条，详情里就在这 5 条之间切换
   return mkts.slice(0,5).map(m=>{
     const st=getMistakeEbb(m);
     const mod=MODULES.find(x=>x.key===m.module)||MODULES.find(x=>x.name===m.module);
@@ -970,6 +971,7 @@ function showAllMistakeEbb(){
     if(sa!==sb) return sa-sb;
     return (b.date||'').localeCompare(a.date||'');
   });
+  _mkNavIds=list.map(m=>m.id); // v2.3.41：待复习列表同样注册导航顺序
   const tags=[['','全部']].concat(MODULES.map(m=>[m.key,m.name]))
     .map(([k,n])=>`<span class="tag ${ebbMkFilter===k?'on':''}" data-k="${k}" onclick="setEbbMkFilter('${k}')">${k?MODULES.find(m=>m.key===k).icon+' ':''}${n}</span>`).join('');
   const curMod=ebbMkFilter?MODULES.find(m=>m.key===ebbMkFilter):null;
@@ -1051,6 +1053,27 @@ let mkListQuery=''; // v2.3.15 考点本搜索关键词（匹配全部字段，�
 let mkListStarOnly=false; // v2.3.16 考点本「只看已收藏」
 let _mkListScroll=0; // 考点本滚动位置记忆（详情返回时恢复）
 let _detailReturnFnMistake=null;
+/* v2.3.41：考点详情的「上一题 / 下一题」导航。
+   _mkNavIds = 最近一次渲染出来的考点列表（按屏幕上看到的顺序存 id），
+   详情页据此上下切换；条目不在该列表里（新录入、从错题跳过来）时回退到全量排序。 */
+let _mkNavIds=[];
+let _mkDetailCurId='';
+function mkNavList(curId){
+  const exists=id=>(DB.mistakes||[]).some(m=>m.id===id);
+  let ids=_mkNavIds.filter(exists);
+  if(curId && ids.indexOf(curId)<0){
+    const modOrder={}; MODULES.forEach((m,i)=>{ modOrder[m.key]=i; });
+    ids=[...(DB.mistakes||[])].sort((a,b)=>{
+      const ma=modOrder[a.module]!==undefined?modOrder[a.module]:99;
+      const mb=modOrder[b.module]!==undefined?modOrder[b.module]:99;
+      if(ma!==mb) return ma-mb;
+      const sa=subRank(a.module,a.sub), sb=subRank(b.module,b.sub);
+      if(sa!==sb) return sa-sb;
+      return (b.date||'').localeCompare(a.date||'');
+    }).map(m=>m.id);
+  }
+  return ids;
+}
 function mistakeListModal(){
   _detailReturnFnMistake='mistakeListModal';
   const starCount=(DB.mistakes||[]).filter(m=>m.star).length;
@@ -1209,6 +1232,7 @@ function renderFullMistakeList(){
     const st=starFirst(a,b); if(st) return st; // v2.3.16 收藏置顶
     return (b.date||'').localeCompare(a.date||'');
   });
+  _mkNavIds=list.map(m=>m.id); // v2.3.41：详情页上下切换按这个顺序
   // 模块 → 子模块 二级分组（与错题本一致）
   const byMod={};
   list.forEach(m=>{ byMod[m.module]=(byMod[m.module]||[]).concat(m); });
@@ -1267,14 +1291,23 @@ function mkItemHtml(m){
     <span style="color:var(--text-light);font-size:11px;flex-shrink:0;">›</span>
   </div>`;
 }
-/* 考点详情弹窗（主页待复习点开进入，可编辑/删除/返回） */
-function viewMistakeDetail(id){
-  if(_detailReturnFnMistake){
+/* 考点详情弹窗（主页待复习点开进入，可编辑/删除/返回）
+   v2.3.41：支持上一题 / 下一题 —— 在当前列表（考点本筛选结果 / 待复习列表 / 主页前 5 条）内顺序切换 */
+function viewMistakeDetail(id, fromNav){
+  if(!fromNav && _detailReturnFnMistake){
     const box=document.getElementById('modalBox');
     if(box) _mkListScroll=box.scrollTop;
   }
   const m=DB.mistakes.find(x=>x.id===id);
   if(!m) return;
+  _mkDetailCurId=id;
+  const navIds=mkNavList(id);
+  const navIdx=navIds.indexOf(id);
+  const navRow=navIds.length>1?`<div style="display:flex;align-items:center;gap:8px;margin:0 0 10px;">
+      <button class="btn btn-sm btn-outline" style="padding:3px 10px;font-size:11px;${navIdx<=0?'opacity:.3;pointer-events:none;':''}" onclick="navMistakeDetail(-1)">‹ 上一题</button>
+      <span style="flex:1;text-align:center;font-size:11px;color:var(--text-light);">${navIdx>=0?navIdx+1:1} / ${navIds.length}</span>
+      <button class="btn btn-sm btn-outline" style="padding:3px 10px;font-size:11px;${navIdx>=navIds.length-1?'opacity:.3;pointer-events:none;':''}" onclick="navMistakeDetail(1)">下一题 ›</button>
+    </div>`:'';
   const st=getMistakeEbb(m);
   const mod=MODULES.find(x=>x.key===m.module);
   openModal(`<div class="modal-head"><h3>考点详情</h3><div style="display:flex;align-items:center;gap:10px;">
@@ -1282,6 +1315,7 @@ function viewMistakeDetail(id){
         onclick="event.stopPropagation();toggleStar('mk','${m.id}')"
         style="font-size:20px;line-height:1;cursor:pointer;user-select:none;${m.star?'':'opacity:.28;'}">${m.star?'⭐':'☆'}</span>
       <button class="modal-close" onclick="backFromMistakeDetail()">✕</button></div></div>
+    ${navRow}
     <div style="font-size:11px;color:var(--text-light);margin-bottom:10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
       <span style="padding:2px 8px;border-radius:10px;background:var(--warning-soft);color:var(--warning);">${mod?mod.name:'未分类'}${m.sub?' · '+m.sub:''}</span>
       <span style="padding:2px 8px;border-radius:10px;background:var(--accent-soft);color:var(--accent);">${st.done?'✅ 5轮已完成':ebbRoundText(st)+'/5'}</span>
@@ -1299,6 +1333,21 @@ function viewMistakeDetail(id){
       <button class="btn btn-sm btn-danger" style="flex:1;" onclick="delMistakeFromDetail('${m.id}')">删除</button>
       <button class="btn btn-sm" style="flex:1;" onclick="backFromMistakeDetail()">返回</button>
     </div>`);
+  /* v2.3.41：切题后回到顶部，否则会停在上一题滚到的位置 */
+  if(fromNav){
+    const box=document.getElementById('modalBox');
+    if(box) box.scrollTop=0;
+  }
+}
+/* v2.3.41：详情内上一题 / 下一题（step = -1 / +1），到头不动 */
+function navMistakeDetail(step){
+  const cur=_mkDetailCurId;
+  if(!cur) return;
+  const ids=mkNavList(cur);
+  const i=ids.indexOf(cur);
+  const j=i+step;
+  if(i<0 || j<0 || j>=ids.length) return;
+  viewMistakeDetail(ids[j], true);
 }
 /* 从易错考点详情返回：如果是从列表进入的，回到列表 */
 function backFromMistakeDetail(){
@@ -1324,7 +1373,7 @@ function nextMistakeDetail(currentId){
     let found=null;
     for(let i=idx+1;i<list.length;i++){ const st=getMistakeEbb(list[i]); if(!st.done&&st.next<=today){found=list[i];break;} }
     if(!found){ for(let i=0;i<idx;i++){ const st=getMistakeEbb(list[i]); if(!st.done&&st.next<=today){found=list[i];break;} } }
-    if(found){ viewMistakeDetail(found.id); return; }
+    if(found){ viewMistakeDetail(found.id, true); return; } // v2.3.41：从详情跳转，别把详情的滚动位置记成列表位置
   }
   closeModal(); renderPage(currentPageName()); toast('🎉 今日考点复习完成！');
 }
@@ -1344,7 +1393,7 @@ function delMistakeFromDetail(id){
   if(DB.mistakeEbb) delete DB.mistakeEbb[id];
   saveDB();
   
-  if(nextItem){ viewMistakeDetail(nextItem.id); } // openModal不清理跟踪变量
+  if(nextItem){ viewMistakeDetail(nextItem.id, true); } // openModal不清理跟踪变量（v2.3.41：从详情跳转，不覆盖列表滚动位置）
   else if(fn){ closeModal(); setTimeout(()=>window[fn](),50); } // 没有下一条，回列表
   else{ closeModal(); renderPage(currentPageName()); toast('已删除'); }
 }
@@ -4278,7 +4327,7 @@ function renderPaper(){
         ${hasZt?`<span class="tag ${paperChartMode==='真题'?'on':''}" data-mode="真题" onclick="setPaperChartMode('真题')">真题</span>`:''}
       </div>
       <div class="chart-box"><canvas id="paperChart"></canvas></div>
-      <div id="paperChartNote" style="font-size:10px;color:var(--text-light);margin-top:4px;text-align:center;">${paperChartMode==='模考'?'绿色=国考 蓝色=广东省考 灰=未标注类型':'绿色=国考真题 蓝色=广东省考真题 灰=未标注卷别'}（按考试日期排序）</div>
+      <div id="paperChartNote" style="font-size:10px;color:var(--text-light);margin-top:4px;text-align:center;">${paperChartMode==='模考'?'绿色=国考 蓝色=广东省考 灰=未标注类型':'按卷别分色：县级卷 / 乡镇卷 / 国考各卷（灰=未标注）'}（按考试日期排序）</div>
     </div>`:''}`;
   if(all.length) renderPaperChart();
 }
@@ -4293,19 +4342,29 @@ function setPaperChartMode(m){
   const titleCnt=document.getElementById('paperChartCount');
   if(titleCnt) titleCnt.textContent=m+' '+cnt+'次';
   const note=document.getElementById('paperChartNote');
-  if(note) note.textContent=(m==='模考'?'绿色=国考 蓝色=广东省考 灰=未标注类型':'绿色=国考真题 蓝色=广东省考真题 灰=未标注卷别')+'（按考试日期排序）';
+  if(note) note.textContent=(m==='模考'?'绿色=国考 蓝色=广东省考 灰=未标注类型':'按卷别分色：县级卷 / 乡镇卷 / 国考各卷（灰=未标注）')+'（按考试日期排序）';
   renderPaperChart();
 }
-/* v2.3.39：真题的「考试主体」由卷别前缀推导（广东省考·县级卷 → 广东省考；国考·副省级 → 国考） */
+/* v2.3.35：真题卷别（用户：「真题有的是广东县级卷有的是乡镇卷」）。
+   下拉固定这几类 + 其他；旧数据没有该字段 → 筛选时归「其他」。
+   v2.3.40 起同时决定真题曲线的线条顺序，故上移到曲线函数之前声明。 */
+const PAPER_KINDS=['广东省考·县级卷','广东省考·乡镇卷','国考·副省级','国考·地市级','国考·行政执法','其他'];
+/* v2.3.40：曲线分组键 —— 真题按「卷别」、模考按「考试类型」。
+   v2.3.39 真题按考试主体（国考/广东省考）分线，可真题清一色广东省考 → 全挤成一条，
+   用户反馈「真题试卷曲线没有分类」。卷别才是真题之间真正的差异（县级卷/乡镇卷/副省级…）。 */
 function paperGroupOf(p){
-  if(p.type==='真题'){
-    const k=p.kind||'';
-    if(k.indexOf('国考')===0) return '国考';
-    if(k.indexOf('广东省考')===0) return '广东省考';
-    return '其他';
-  }
+  if(p.type==='真题') return p.kind||'其他';
   return p.examType||'其他';
 }
+/* 线条配色：按出现顺序取色，最多 6 条；超出循环复用 */
+const PAPER_LINE_COLORS=[
+  {c:'#4a7bb5',f:'rgba(74,123,181,.08)'},
+  {c:'#c08552',f:'rgba(192,133,82,.08)'},
+  {c:'#5b8a5a',f:'rgba(91,138,90,.08)'},
+  {c:'#8a6bb5',f:'rgba(138,107,181,.08)'},
+  {c:'#b55a7b',f:'rgba(181,90,123,.08)'},
+  {c:'#9aa79a',f:'rgba(154,167,154,.08)'},
+];
 function renderPaperChart(){
   /* v2.3.39：曲线按「模考 / 真题」分开画（用户：「现在都画在一起没有区分度」）。
      原因：原来三条线（国考模考/广东省考模考/真题）共用一条 x 轴，且轴上塞了**所有**试卷的
@@ -4322,14 +4381,29 @@ function renderPaperChart(){
   const mode=paperChartMode;
   const items=all.filter(p=>p.type===mode).sort((a,b)=>a.date.localeCompare(b.date));
   const labels=items.map(p=>p.date.slice(5));
-  const defs=[
-    {key:'国考',   color:'#5b8a5a', fill:'rgba(91,138,90,.08)'},
-    {key:'广东省考',color:'#4a7bb5', fill:'rgba(74,123,181,.08)'},
-    {key:'未标注', color:'#9aa79a', fill:'rgba(154,167,154,.08)'},
-  ];
+  /* v2.3.40：真题按卷别成线（广东省考·县级卷 / 乡镇卷 / 国考·副省级…），
+     按 PAPER_KINDS 的固定顺序排，未在列表里的卷别排最后；同卷别的点连成一条。
+     模考仍按 examType 分线（国考/广东省考/未标注）。 */
+  let defs;
+  if(mode==='真题'){
+    const ks=[...new Set(items.map(p=>p.kind||'其他'))];
+    ks.sort((a,b)=>{
+      const ia=PAPER_KINDS.indexOf(a), ib=PAPER_KINDS.indexOf(b);
+      return (ia<0?99:ia)-(ib<0?99:ib);
+    });
+    defs=ks.map((k,i)=>({key:k,label:k==='其他'?'未标注':k,
+      color:PAPER_LINE_COLORS[i%PAPER_LINE_COLORS.length].c,
+      fill:PAPER_LINE_COLORS[i%PAPER_LINE_COLORS.length].f}));
+  }else{
+    defs=[
+      {key:'国考',    label:'国考',   color:'#5b8a5a', fill:'rgba(91,138,90,.08)'},
+      {key:'广东省考',label:'广东省考',color:'#4a7bb5', fill:'rgba(74,123,181,.08)'},
+      {key:'其他',    label:'未标注', color:'#9aa79a', fill:'rgba(154,167,154,.08)'},
+    ];
+  }
   const series=defs.map(d=>{
     const data=items.map(p=>paperGroupOf(p)===d.key?p.score:null);
-    return {label:d.key,color:d.color,fill:d.fill,data};
+    return {label:d.label,color:d.color,fill:d.fill,data};
   }).filter(s=>s.data.some(v=>v!==null));
   /* v2.3.39：y 轴按当前类别的分数区间自适应（0~100 的固定轴会把 55~70 的分段压成一条平线，
      与「没有区分度」的观感直接相关）；上下各留 5 分余量、取整到 10，仍封顶 100。 */
@@ -4365,7 +4439,6 @@ const PAPER_TYPES=['模考','真题'];
 const PAPER_EXAM_TYPES=['国考','广东省考']; // v2.2.28 模考类型（国考/广东省考），曲线分色显示
 /* v2.3.35：真题卷别（用户：「真题有的是广东县级卷有的是乡镇卷」）。
    下拉固定这几类 + 其他；旧数据没有该字段 → 筛选时归「其他」。 */
-const PAPER_KINDS=['广东省考·县级卷','广东省考·乡镇卷','国考·副省级','国考·地市级','国考·行政执法','其他'];
 const PAPER_MODULES=['政治理论','常识判断','言语理解','数量关系','判断推理','资料分析']; // v2.2.99：数量关系提到判断推理之前（卡片显示与编辑表单一体统一）
 function paperModal(id){
   paperModalId=id||'';
@@ -7790,7 +7863,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.3.39';
+const APP_VERSION='v2.3.41';
 /* v2.3.34：飞书应用凭证来自「设置 → 飞书应用」（存 DB.settings，随云端同步）。
    ⚠️ 切勿把它明文写进本文件：① 本页源码是公开的；② GitHub 的 secret scanning
    会直接拒绝含 LARK_APP_SECRET 的推送（实测 409 Secret detected in content）。 */
