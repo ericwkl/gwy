@@ -5084,7 +5084,7 @@ async function renderAccu(){
   const seed=getAccuSeed();
   // v2.2.57：缓存带版本号——解析/渲染逻辑升级时手动+1，强制旧版本渲染的缓存 HTML 失效，
   // 防止跨版本复用旧缓存（如 v2.2.55 渲染的【莫此】拆词 HTML 在 v2.2.56 下继续命中）
-  const ACCU_CACHE_VER=28;  // v2.3.38：编号行识别放宽（2 字标题不再漏编号）→ 条目文本变，旧缓存失效。
+  const ACCU_CACHE_VER=29;  // v2.3.38：编号行识别放宽（2 字标题不再漏编号）→ 条目文本变，旧缓存失效。
                             // v2.3.36：轮转卡改为「固定顺序 + 顺移一格」（修刷新重复），选中结果变 → 旧缓存失效。  // v2.3.33：政治理论一级标题判定放宽（支持 `# 1. xxx` 形式）→ 话题结构变。
                             // v2.3.32：言语解析器修「分类标题误判」+ 每日条数 12→30 → 词条集合与展示量都变。
                             // v2.3.31：常识「广东省情」取消屏蔽 → 常识 7 → 8 个话题，旧缓存必须失效。
@@ -5394,7 +5394,25 @@ async function renderAccu(){
          既丢了标题、又没法知道每批条目属于哪个子节。现在把 `##`/`###` 保留为子话题：
          一级话题自身的条目放 items，各子标题下的条目按 {name, items} 收进 subs，
          渲染时 subs 逐个用**默认折叠**的 <details> 呈现。 */
-      let curSubName=null, curSubs=[];
+      /* v2.3.42：子标题改为**多层嵌套**（用户：「三四级标题咋显示成一个层级」）。
+         原实现 `##`~`######` 全部塞进同一个 subs 数组 → 「唯物论（###）」和它下面的
+         「基本范畴（####）」变成兄弟节点，层级信息直接丢失。
+         现在：`##`=lvl2、`###`=lvl3、`####`=lvl4……按层级挂父子；遇到同级/更浅标题先关掉更深层。
+         条目始终落进「当前最深标题」的 items。 */
+      let curSubs=[];      // 顶层子话题（`##` 级）
+      let curSubStack=[];  // 打开的标题栈，栈顶 = 当前最深标题 {name,lvl,items,subs}
+      const curItemsBox=()=>curSubStack.length?curSubStack[curSubStack.length-1].items:curItems;
+      const flushCurItem=()=>{ if(curItem){ curItemsBox().push(curItem); curItem=null; } };
+      const openSub=(name,lvl)=>{
+        flushCurItem();
+        while(curSubStack.length && curSubStack[curSubStack.length-1].lvl>=lvl) curSubStack.pop();
+        const node={name, lvl, items:[], subs:[]};
+        if(curSubStack.length) curSubStack[curSubStack.length-1].subs.push(node);
+        else curSubs.push(node);
+        curSubStack.push(node);
+        curIndent=-1;
+      };
+      const resetSubs=()=>{ curSubStack=[]; };
       const CN_NUM='一二三四五六七八九十';
       items.forEach(k=>{
         /* v2.3.25：每份知识库条目（= 一份文档）独立成篇。
@@ -5405,11 +5423,10 @@ async function renderAccu(){
            下面冒出社会建设/医疗卫生的内容）。
            处理：进入新文档前先结算上一份未收尾的话题，再复位全部状态。
            单份文档时本段等价于空操作，行为逐字节不变。 */
-        if(curItem){ curItems.push(curItem); curItem=null; }
-        if(curSubName!==null && curItems.length){ curSubs.push({name:curSubName, items:curItems}); curItems=[]; }
+        flushCurItem();
         if(curTopic && (curItems.length||curSubs.length)) topics.push({topic:curTopic, items:curItems, subs:curSubs});
         curTopic=null; curItems=[]; curItem=null; curIndent=-1; curL1='';
-        curSubName=null; curSubs=[];
+        resetSubs(); curSubs=[];
         // v2.2.97：保留行首缩进 —— 飞书 blocks 重建后，缩进深度 = 树深，
         // 是判断「子项归属」的可靠信号（比文本模式猜测准确）。
         // 但只在【该行确实带缩进】时启用；缩进为 0 的行（老数据 raw_content / 手输内容）
@@ -5462,10 +5479,9 @@ async function renderAccu(){
           if(hLvlDepth===1 || (/^[一二三四五六七八九十]+[、，]/.test(line) && hLvlDepth===0)){
             /* v2.3.30：`#` 一级标题 = **轮转单位**（常识与政治理论同规则）。
                进入新大类前，先结算上一个大类（含其未收尾的子话题）。 */
-            if(curItem){ curItems.push(curItem); curItem=null; }
-            if(curSubName!==null && curItems.length){ curSubs.push({name:curSubName, items:curItems}); curItems=[]; }
+            flushCurItem();
             if(curTopic && (curItems.length||curSubs.length)) topics.push({topic:curTopic, items:curItems, subs:curSubs});
-            curSubName=null; curSubs=[];
+            resetSubs(); curSubs=[];
             /* v2.3.33：话题名再去掉阿拉伯数字编号前缀（「1. 就业与社会治理」→「就业与社会治理」） */
             curL1=line.replace(/^[一二三四五六七八九十]+[、，]\s*/,'').replace(/^\d+[.、]\s*/,'').trim();
             curTopic=curL1; curItems=[]; curIndent=-1;
@@ -5492,9 +5508,7 @@ async function renderAccu(){
             if(h){
               /* v2.3.28/29/30：`##`/`###` 一律保留为**子话题**（标题名不丢），渲染时默认折叠。
                  常识与政治理论同规则。 */
-              if(curItem){ curItems.push(curItem); curItem=null; }
-              if(curSubName!==null && curItems.length){ curSubs.push({name:curSubName, items:curItems}); curItems=[]; }
-              curSubName=h; curIndent=-1;
+              openSub(h, hLvlDepth);
               continue;
             }
           }
@@ -5504,9 +5518,7 @@ async function renderAccu(){
             /* v2.3.28/30：已出现过 `#` 一级标题时，裸 `（X）` 子标题同样作为**子话题**。
                （加 `curL1` 前提：文档完全没有 `#` 时保持旧行为，避免整篇塌成一个「知识点」。） */
             if(curL1){
-              if(curItem){ curItems.push(curItem); curItem=null; }
-              if(curSubName!==null && curItems.length){ curSubs.push({name:curSubName, items:curItems}); curItems=[]; }
-              curSubName=m2[1].trim(); curIndent=-1;
+              openSub(m2[1].trim(), curSubStack.length?curSubStack[curSubStack.length-1].lvl+1:2);
               continue;
             }
             if(curItem){ curItems.push(curItem); curItem=null; }
@@ -5534,16 +5546,15 @@ async function renderAccu(){
              `(?=\D)` 是防「1.5倍」「2026.10.19」这类小数/日期被误切（否则会剩「5倍」）。 */
           const m3=line.match(/^\d+[\.、]\s*(?=\D)(.+)$/);
           if(m3){
-            if(curItem){ curItems.push(curItem); }
+            flushCurItem();
             curItem=m3[1].trim();
             curIndent=indent;
             continue;
           }
           // v2.2.94/96：无序号小标题识别（仅对无缩进行生效 —— 带缩进的是子项，交给上面分支）
           if(indent===0 && isSplitLine(line) && !/^\d/.test(line)){
-            if(curItem){ curItems.push(curItem); }
-            curItems.push(line);
-            curItem=null;
+            flushCurItem();
+            curItemsBox().push(line);
             curIndent=-1;
             continue;
           }
@@ -5566,17 +5577,16 @@ async function renderAccu(){
           }
           // 缩进 > 0 且与父条目同深或更浅 → 开新条目
           const body=line.replace(/^[-•◦·]\s*/,'').replace(/^\d+[\.、]\s*/,'');
-          if(curItem!==null){ curItems.push(curItem); }
+          flushCurItem(); // v2.3.42：必须落到「当前最深标题」，不能再直接写 curItems
           curItem=body;
           curIndent=indent;
           if(!body){ curItem=null; curIndent=-1; }
         }
       });
       // 收尾（结算最后一个大类 + 其未收尾的子话题）
-      if(curItem){ curItems.push(curItem); curItem=null; }
-      if(curSubName!==null && curItems.length){ curSubs.push({name:curSubName, items:curItems}); curItems=[]; }
+      flushCurItem();
       if(curTopic && (curItems.length||curSubs.length)) topics.push({topic:curTopic, items:curItems, subs:curSubs});
-      else if(!curTopic && curSubs.length) curSubs.forEach(s=>topics.push({topic:s.name, items:s.items}));
+      else if(!curTopic && curSubs.length) curSubs.forEach(s=>topics.push({topic:s.name, items:s.items, subs:s.subs||[]}));
       // 无话题标题时也保留
       if(!curTopic && curItems.length) topics.push({topic:'知识点', items:curItems});
 
@@ -5589,7 +5599,9 @@ async function renderAccu(){
         // 每个话题内容天然来自同一小节，条数少不等于质量低。
         /* v2.3.29：政治理论的话题内容主要在 subs 里，门槛必须按**总条数**算，
            否则「马克思主义」这种 items=0 / subs=36 的话题会被判为 0 条而掉出轮转池。 */
-        const tCount=t=>((t.items||[]).length)+((t.subs||[]).reduce((s,x)=>s+((x.items||[]).length),0));
+        /* v2.3.42：条数统计必须递归——四/五级标题下的条目原本数不到，话题会被误判为「0 条」掉出轮转池 */
+        const subTotal=s=>((s.items||[]).length)+((s.subs||[]).reduce((a,x)=>a+subTotal(x),0));
+        const tCount=t=>((t.items||[]).length)+((t.subs||[]).reduce((a,x)=>a+subTotal(x),0));
         const rich=topics.filter(t=>tCount(t)>=2);
         const pool=rich.length?rich:topics.filter(t=>tCount(t)>=1);
         const finalPool=pool.length?pool:topics;
@@ -5614,7 +5626,10 @@ async function renderAccu(){
           : `<div style="padding:4px 0 4px 8px;font-size:12px;color:var(--text);line-height:1.7;border-bottom:1px solid var(--border);white-space:pre-wrap;">${escapeHtml(p)}</div>`;
         /* v2.3.29：子话题（`##`/`###` 级）默认**折叠**（用户：「你可以把子话题改成默认折叠」）。
            不写 open → 默认收起，摘要显示「子话题名（N条）」，点开看全部条目。 */
-        const subsHtml=subs.map(s=>`<details style="margin:6px 0 2px;"><summary style="font-size:12px;font-weight:600;color:var(--primary);cursor:pointer;padding:4px 0;">${escapeHtml(s.name)}<span style="font-weight:normal;color:var(--text-light);margin-left:4px;">（${s.items.length}条）</span></summary><div style="padding:2px 0 4px 8px;">${s.items.map(itemLine).join('')}</div></details>`).join('');
+        /* v2.3.42：子话题递归渲染 —— 每深一层缩进 10px、字号颜色略降，
+           这样「唯物论（###）」下面才会缩进挂着「基本范畴（####）」，而不是并排成同级。 */
+        const renderSub=(s,depth)=>`<details style="margin:${depth?'4px 0 2px':'6px 0 2px'};${depth?'margin-left:10px;':''}"><summary style="font-size:12px;font-weight:600;color:${depth?'var(--text)':'var(--primary)'};cursor:pointer;padding:4px 0;">${escapeHtml(s.name)}<span style="font-weight:normal;color:var(--text-light);margin-left:4px;">（${subTotal(s)}条）</span></summary><div style="padding:2px 0 4px 8px;">${(s.items||[]).map(itemLine).join('')}${(s.subs||[]).map(x=>renderSub(x,depth+1)).join('')}</div></details>`;
+        const subsHtml=subs.map(s=>renderSub(s,0)).join('');
         cards+=`<div class="card">
           <div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span style="display:flex;align-items:center;gap:6px;"><span class="section-tag">${escapeHtml(t.topic)}</span>${accuCardRefreshBtn(cat.display)}</span></div>
           ${picked.map(itemLine).join('')}
@@ -7863,7 +7878,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.3.41';
+const APP_VERSION='v2.3.42';
 /* v2.3.34：飞书应用凭证来自「设置 → 飞书应用」（存 DB.settings，随云端同步）。
    ⚠️ 切勿把它明文写进本文件：① 本页源码是公开的；② GitHub 的 secret scanning
    会直接拒绝含 LARK_APP_SECRET 的推送（实测 409 Secret detected in content）。 */
