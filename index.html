@@ -4908,6 +4908,11 @@ function extractYyWords(kbItems){
     const re2b=/(?:^|\n)([^】\n：、，]{9,40})[:：]\s*([^\n]{2,150})/g;
     while((m=re2b.exec(txt))){
       const whole=m[0].trim();
+      /* v2.3.44：编号词条的「编号 + 短词名」会被 re2b 当成 9~40 字长词条 ——
+         如「27. 因噎废食 ：比喻…」，冒号前恰好 9 个字符（数字/点/空格也算），
+         而 re2a 早已生成【因噎废食】，于是卡片上多出一条带「27.」的重复项
+         （用户：「因噎废食为什么有个标号」）。这类行交给 re2a，这里直接跳过。 */
+      if(/^\d+[.、]\s*\S{1,8}\s*[:：]/.test(whole)) continue;
       let isEx=false;
       for(const ex of exampleLines){ if(whole.startsWith(ex) || ex.startsWith(whole)){ isEx=true; break; } }
       if(isEx) continue;
@@ -5084,7 +5089,7 @@ async function renderAccu(){
   const seed=getAccuSeed();
   // v2.2.57：缓存带版本号——解析/渲染逻辑升级时手动+1，强制旧版本渲染的缓存 HTML 失效，
   // 防止跨版本复用旧缓存（如 v2.2.55 渲染的【莫此】拆词 HTML 在 v2.2.56 下继续命中）
-  const ACCU_CACHE_VER=29;  // v2.3.38：编号行识别放宽（2 字标题不再漏编号）→ 条目文本变，旧缓存失效。
+  const ACCU_CACHE_VER=33;  // v2.3.38：编号行识别放宽（2 字标题不再漏编号）→ 条目文本变，旧缓存失效。
                             // v2.3.36：轮转卡改为「固定顺序 + 顺移一格」（修刷新重复），选中结果变 → 旧缓存失效。  // v2.3.33：政治理论一级标题判定放宽（支持 `# 1. xxx` 形式）→ 话题结构变。
                             // v2.3.32：言语解析器修「分类标题误判」+ 每日条数 12→30 → 词条集合与展示量都变。
                             // v2.3.31：常识「广东省情」取消屏蔽 → 常识 7 → 8 个话题，旧缓存必须失效。
@@ -5554,7 +5559,8 @@ async function renderAccu(){
           // v2.2.94/96：无序号小标题识别（仅对无缩进行生效 —— 带缩进的是子项，交给上面分支）
           if(indent===0 && isSplitLine(line) && !/^\d/.test(line)){
             flushCurItem();
-            curItemsBox().push(line);
+            /* v2.3.43：这类「短标题行」也会带 `- ` 前缀（飞书列表），入条前去符号 */
+            curItemsBox().push(line.replace(/^[-•◦·]\s*/,''));
             curIndent=-1;
             continue;
           }
@@ -5570,7 +5576,10 @@ async function renderAccu(){
             if(curItem && sub.length>=2){
               curItem+='\n'+sub;
             }else if(!curItem && line.length>=6){
-              curItem=line;
+              /* v2.3.43：新建条目时去掉行首项目符号（`- ` / `• `）。
+                 飞书导出的 Markdown 正文全是 `- ` 列表，原先整行存进条目，
+                 卡片上每条都以「- 」开头，与其他行不一致。 */
+              curItem=sub;
               curIndent=0;
             }
             continue;
@@ -5627,8 +5636,25 @@ async function renderAccu(){
         /* v2.3.29：子话题（`##`/`###` 级）默认**折叠**（用户：「你可以把子话题改成默认折叠」）。
            不写 open → 默认收起，摘要显示「子话题名（N条）」，点开看全部条目。 */
         /* v2.3.42：子话题递归渲染 —— 每深一层缩进 10px、字号颜色略降，
-           这样「唯物论（###）」下面才会缩进挂着「基本范畴（####）」，而不是并排成同级。 */
-        const renderSub=(s,depth)=>`<details style="margin:${depth?'4px 0 2px':'6px 0 2px'};${depth?'margin-left:10px;':''}"><summary style="font-size:12px;font-weight:600;color:${depth?'var(--text)':'var(--primary)'};cursor:pointer;padding:4px 0;">${escapeHtml(s.name)}<span style="font-weight:normal;color:var(--text-light);margin-left:4px;">（${subTotal(s)}条）</span></summary><div style="padding:2px 0 4px 8px;">${(s.items||[]).map(itemLine).join('')}${(s.subs||[]).map(x=>renderSub(x,depth+1)).join('')}</div></details>`;
+           这样「唯物论（###）」下面才会缩进挂着「基本范畴（####）」，而不是并排成同级。
+           v2.3.43：最里面两层不再折叠（用户：「每次还得点开才能看到内容」）——
+             ① **顶层**子节（depth=0）一律折叠，保证卡片先给出结构、不至于一屏铺满
+                （常识这类两层文档，6 个子节全部摊开太长）；
+             ② 更内层的叶子节点不套 <details>，标题 + 条目直接铺开；
+             ③ 更内层「子节点全是叶子」的那一层 <details open> 默认展开。
+             于是政治理论卡：点开「辩证唯物主义」一次 → 唯物论/辩证法/认识论已展开、叶子内容直接可见。 */
+        const renderSub=(s,depth)=>{
+          const kids=s.subs||[];
+          const isTop=depth===0;
+          const pad=isTop?'':'margin-left:10px;';
+          const head=`<span style="font-size:12px;font-weight:600;color:${isTop?'var(--primary)':'var(--text)'};">${escapeHtml(s.name)}<span style="font-weight:normal;color:var(--text-light);margin-left:4px;">（${subTotal(s)}条）</span></span>`;
+          const body=(s.items||[]).map(itemLine).join('');
+          if(!kids.length && !isTop){
+            return `<div style="margin:6px 0 2px;${pad}"><div style="padding:4px 0;">${head}</div>${body}</div>`;
+          }
+          const openAttr=(!isTop && kids.every(x=>!(x.subs||[]).length))?' open':'';
+          return `<details${openAttr} style="margin:6px 0 2px;${pad}"><summary style="cursor:pointer;padding:4px 0;">${head}</summary><div style="padding:2px 0 4px 8px;">${body}${kids.map(x=>renderSub(x,depth+1)).join('')}</div></details>`;
+        };
         const subsHtml=subs.map(s=>renderSub(s,0)).join('');
         cards+=`<div class="card">
           <div class="card-title"><span class="left"><span class="emoji">${icon}</span>${cat.display}</span><span style="display:flex;align-items:center;gap:6px;"><span class="section-tag">${escapeHtml(t.topic)}</span>${accuCardRefreshBtn(cat.display)}</span></div>
@@ -7878,7 +7904,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.3.42';
+const APP_VERSION='v2.3.44';
 /* v2.3.34：飞书应用凭证来自「设置 → 飞书应用」（存 DB.settings，随云端同步）。
    ⚠️ 切勿把它明文写进本文件：① 本页源码是公开的；② GitHub 的 secret scanning
    会直接拒绝含 LARK_APP_SECRET 的推送（实测 409 Secret detected in content）。 */
