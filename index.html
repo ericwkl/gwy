@@ -691,7 +691,185 @@ function renderHome(){
     ${renderTodayErrorEbb()}
   </div>`;
 
-  document.getElementById('page-home').innerHTML = examHtml + mistakeEbbHtml + errorHtml + reviewHtml;
+  document.getElementById('page-home').innerHTML = examHtml + `<div id="mathCardHost">${mathCardHtml()}</div>` + mistakeEbbHtml + errorHtml + reviewHtml;
+}
+
+/* ============================================================
+   ⚡ 速算（随机一位数加减）
+   - 每组题数 / 运算类型可在卡片上切，存在 DB.mathDrillCfg
+   - 每题独立计时：题目出现 → 提交，毫秒记进记录
+   - 输入即判定（0/2~9 开头立刻提交；1 开头等第二位或回车），
+     少按一次「确定」，计时才不掺键盘操作的时间
+   ============================================================ */
+function mathDrills(){ if(!Array.isArray(DB.mathDrills)) DB.mathDrills=[]; return DB.mathDrills; }
+function mathCfg(){
+  const c=DB.mathDrillCfg;
+  if(!c||typeof c!=='object') DB.mathDrillCfg={count:20,mode:'加减'};
+  if([10,20,30,50,100].indexOf(DB.mathDrillCfg.count)<0) DB.mathDrillCfg.count=20;
+  if(['加减','加','减'].indexOf(DB.mathDrillCfg.mode)<0) DB.mathDrillCfg.mode='加减';
+  return DB.mathDrillCfg;
+}
+function mathTodayStat(){
+  const d=todayStr();
+  const list=mathDrills().filter(x=>x&&x.date===d);
+  if(!list.length) return null;
+  const n=list.reduce((a,x)=>a+(x.count||0),0);
+  const c=list.reduce((a,x)=>a+(x.correct||0),0);
+  const ms=list.reduce((a,x)=>a+(x.totalMs||0),0);
+  if(!n) return null;
+  return {n, c, avg:ms/n, acc:Math.round(c/n*100)};
+}
+function mathBest(){
+  const l=mathDrills().filter(x=>x&&x.count>=10&&x.avgMs>0);
+  if(!l.length) return null;
+  return l.reduce((a,b)=>a.avgMs<b.avgMs?a:b);
+}
+function mathCardHtml(){
+  const cfg=mathCfg(), st=mathTodayStat(), best=mathBest();
+  const chip=(label,on,fn)=>`<span class="tag ${on?'on':''}" style="cursor:pointer;" onclick="${fn}">${label}</span>`;
+  return `<div class="card" id="mathCard">
+    <div class="card-title"><span class="left"><span class="emoji">⚡</span>速算</span>
+      <span style="font-size:10px;color:var(--text-light);">一位数加减 · 逐题计时</span></div>
+    <div class="tag-list" style="gap:5px;margin:0 0 6px;">
+      <span style="font-size:11px;color:var(--text-soft);align-self:center;">每组</span>
+      ${[10,20,30,50,100].map(n=>chip(n+'题',cfg.count===n,`setMathCfg('count',${n})`)).join('')}
+    </div>
+    <div class="tag-list" style="gap:5px;margin:0 0 8px;">
+      <span style="font-size:11px;color:var(--text-soft);align-self:center;">类型</span>
+      ${['加减','加','减'].map(m=>chip(m,cfg.mode===m,`setMathCfg('mode','${m}')`)).join('')}
+    </div>
+    <div style="font-size:12px;color:var(--text);line-height:1.7;">
+      ${st?`今日 <b>${st.n}</b> 题 · 平均 <b>${(st.avg/1000).toFixed(1)}s</b> · 正确率 <b>${st.acc}%</b>`
+          :'<span style="color:var(--text-light);">今日还没练</span>'}
+      ${best?`<div style="font-size:11px;color:var(--text-light);">最佳平均 ${(best.avgMs/1000).toFixed(1)}s（${best.count} 题）</div>`:''}
+    </div>
+    <button class="btn btn-full" style="margin-top:8px;" onclick="startMathDrill()">开始 ${cfg.count} 题</button>
+  </div>`;
+}
+function refreshMathCard(){ const h=document.getElementById('mathCardHost'); if(h) h.innerHTML=mathCardHtml(); }
+function setMathCfg(k,v){ mathCfg()[k]=v; saveDB(); refreshMathCard(); }
+
+let _md=null;
+function mathNewQ(mode,prev){
+  const op = mode==='加'?'+':(mode==='减'?'-':(Math.random()<0.5?'+':'-'));
+  let a=1+Math.floor(Math.random()*9), b=1+Math.floor(Math.random()*9);
+  if(op==='-' && a<b){ const t=a; a=b; b=t; }
+  const text=`${a} ${op} ${b}`;
+  if(prev && prev.text===text) return mathNewQ(mode,prev); // 避免连续两题一模一样
+  return {a,b,op,text,ans:op==='+'?a+b:a-b};
+}
+function startMathDrill(){
+  const cfg=mathCfg();
+  _md={count:cfg.count, mode:cfg.mode, idx:0, items:[], cur:null, t0:0, locked:false, tick:null, last:null};
+  openModal(`<div class="modal-head"><h3>⚡ 速算</h3><button class="modal-close" onclick="endMathDrill()">✕</button></div>
+    <div id="mdBody"></div>`);
+  nextMathQuestion();
+}
+function nextMathQuestion(){
+  if(!_md) return;
+  if(_md.idx>=_md.count){ endMathDrill(); return; }
+  const q=mathNewQ(_md.mode,_md.last);
+  _md.cur=q; _md.last=q; _md.t0=performance.now(); _md.locked=false;
+  const body=document.getElementById('mdBody');
+  if(!body) return;
+  body.innerHTML=`<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-light);padding:0 2px 2px;">
+      <span>第 ${_md.idx+1} / ${_md.count} 题</span><span id="mdT">0.0s</span>
+    </div>
+    <div style="text-align:center;font-size:46px;font-weight:700;letter-spacing:3px;padding:14px 0 4px;">${q.a} ${q.op} ${q.b} <span style="color:var(--text-light);">=</span></div>
+    <input id="mdAns" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" autocorrect="off" spellcheck="false"
+      oninput="mathInput(this)" onkeydown="if(event.key==='Enter'){event.preventDefault();mathSubmit();}"
+      style="width:100%;box-sizing:border-box;font-size:34px;text-align:center;padding:8px;border:2px solid var(--border);border-radius:10px;background:var(--bg-soft);color:var(--text);outline:none;">
+    <div id="mdTip" style="text-align:center;font-size:12px;height:22px;line-height:22px;margin-top:6px;color:var(--text-light);">输入答案即判定</div>
+    <div class="modal-foot"><button class="btn btn-sm btn-outline" style="flex:1" onclick="endMathDrill()">结束本组</button></div>`;
+  const el=document.getElementById('mdAns');
+  if(el) setTimeout(()=>{ try{ el.focus({preventScroll:true}); }catch(e){ el.focus(); } },30);
+  clearInterval(_md.tick);
+  _md.tick=setInterval(()=>{
+    const t=document.getElementById('mdT');
+    if(!t){ clearInterval(_md.tick); return; }
+    if(!_md||_md.locked) return;
+    t.textContent=((performance.now()-_md.t0)/1000).toFixed(1)+'s';
+  },100);
+}
+function mathInput(el){
+  if(!_md||_md.locked) return;
+  const v=String(el.value||'').replace(/\D/g,'').slice(0,2);
+  if(v!==el.value) el.value=v;
+  if(!v) return;
+  // 只在「还可能是正确答案的前缀」时等第二位（如答案 15、已输入 1）；
+  // 其余情况立即判定 —— 答案 1 输入 1 也直接提交，不用额外按确定。
+  const as=String(_md.cur?_md.cur.ans:'');
+  if(v.length<as.length && as.indexOf(v)===0) return;
+  mathSubmit();
+}
+function mathSubmit(){
+  if(!_md||_md.locked||!_md.cur) return;
+  const el=document.getElementById('mdAns');
+  if(!el) return;
+  const raw=String(el.value||'').replace(/\D/g,'');
+  if(!raw) return;
+  _md.locked=true;
+  clearInterval(_md.tick);
+  const ms=Math.round(performance.now()-_md.t0);
+  const ok=Number(raw)===_md.cur.ans;
+  _md.items.push({q:_md.cur.text,a:_md.cur.ans,u:Number(raw),ms,ok});
+  el.readOnly=true;
+  el.style.borderColor=ok?'var(--primary)':'var(--danger)';
+  el.style.color=ok?'var(--primary)':'var(--danger)';
+  const tip=document.getElementById('mdTip');
+  if(tip) tip.innerHTML=ok
+    ? `<span style="color:var(--primary);">✓ ${(ms/1000).toFixed(2)}s</span>`
+    : `<span style="color:var(--danger);">✗ 正确答案 ${_md.cur.ans}（${(ms/1000).toFixed(2)}s）</span>`;
+  _md.idx++;
+  setTimeout(()=>{ if(_md) nextMathQuestion(); }, ok?280:750);
+}
+function closeMathSummary(){
+  closeModal();
+  if(currentPageName()==='home') renderHome();
+}
+function endMathDrill(){
+  clearInterval(_md&&_md.tick);
+  const items=_md?_md.items.slice():[];
+  _md=null;
+  if(!items.length){ closeModal(); return; }
+  finishMathDrill(items);
+}
+function finishMathDrill(items){
+  const total=items.reduce((a,x)=>a+x.ms,0);
+  const correct=items.filter(x=>x.ok).length;
+  const avg=total/items.length;
+  const best=Math.min.apply(null,items.map(x=>x.ms));
+  const worst=Math.max.apply(null,items.map(x=>x.ms));
+  const rec={id:uid(),ts:Date.now(),date:todayStr(),count:items.length,correct,
+    totalMs:total,avgMs:Math.round(avg),bestMs:best,worstMs:worst,items};
+  mathDrills().push(rec);
+  if(mathDrills().length>60) DB.mathDrills=DB.mathDrills.slice(-60); // 只留最近 60 组，避免同步体积膨胀
+  saveDB();
+  refreshMathCard();
+  const rows=items.map((x,i)=>`<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px;">
+      <span style="width:22px;color:var(--text-light);font-size:10px;">${i+1}</span>
+      <span style="flex:1;">${x.q} = <b style="color:${x.ok?'var(--primary)':'var(--danger)'};">${x.a}</b>${x.ok?'':`<span style="color:var(--text-light);font-size:11px;">（你填 ${x.u}）</span>`}</span>
+      <span style="color:${x.ok?'var(--text-light)':'var(--danger)'};font-size:11px;">${x.ok?'✓':'✗'}</span>
+      <span style="width:52px;text-align:right;color:var(--text-light);font-size:11px;">${(x.ms/1000).toFixed(2)}s</span>
+    </div>`).join('');
+  openModal(`<div class="modal-head"><h3>本组完成</h3><button class="modal-close" onclick="closeMathSummary()">✕</button></div>
+    <div style="display:flex;gap:8px;text-align:center;margin:2px 0 10px;">
+      <div style="flex:1;background:var(--bg-soft);border-radius:10px;padding:8px 4px;">
+        <div style="font-size:20px;font-weight:700;color:var(--primary);">${(avg/1000).toFixed(1)}s</div>
+        <div style="font-size:10px;color:var(--text-light);">平均每题</div></div>
+      <div style="flex:1;background:var(--bg-soft);border-radius:10px;padding:8px 4px;">
+        <div style="font-size:20px;font-weight:700;">${Math.round(correct/items.length*100)}%</div>
+        <div style="font-size:10px;color:var(--text-light);">正确率 ${correct}/${items.length}</div></div>
+      <div style="flex:1;background:var(--bg-soft);border-radius:10px;padding:8px 4px;">
+        <div style="font-size:20px;font-weight:700;">${(total/1000).toFixed(0)}s</div>
+        <div style="font-size:10px;color:var(--text-light);">总用时</div></div>
+    </div>
+    <div style="font-size:11px;color:var(--text-light);margin-bottom:6px;">最快 ${(best/1000).toFixed(2)}s · 最慢 ${(worst/1000).toFixed(2)}s</div>
+    <div style="max-height:44vh;overflow-y:auto;">${rows}</div>
+    <div class="modal-foot">
+      <button class="btn btn-sm btn-outline" style="flex:1" onclick="closeMathSummary()">关闭</button>
+      <button class="btn btn-sm" style="flex:1;background:var(--primary);color:#fff;" onclick="startMathDrill()">再来一组</button>
+    </div>`);
 }
 
 /* ============================================================
@@ -7904,7 +8082,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.3.44';
+const APP_VERSION='v2.3.45';
 /* v2.3.34：飞书应用凭证来自「设置 → 飞书应用」（存 DB.settings，随云端同步）。
    ⚠️ 切勿把它明文写进本文件：① 本页源码是公开的；② GitHub 的 secret scanning
    会直接拒绝含 LARK_APP_SECRET 的推送（实测 409 Secret detected in content）。 */
