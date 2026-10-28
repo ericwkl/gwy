@@ -4505,7 +4505,7 @@ function renderPaper(){
         ${hasZt?`<span class="tag ${paperChartMode==='真题'?'on':''}" data-mode="真题" onclick="setPaperChartMode('真题')">真题</span>`:''}
       </div>
       <div class="chart-box"><canvas id="paperChart"></canvas></div>
-      <div id="paperChartNote" style="font-size:10px;color:var(--text-light);margin-top:4px;text-align:center;">${paperChartMode==='模考'?'绿色=国考 蓝色=广东省考 灰=未标注类型':'按卷别分色：县级卷 / 乡镇卷 / 国考各卷（灰=未标注）'}（按考试日期排序）</div>
+      <div id="paperChartNote" style="font-size:10px;color:var(--text-light);margin-top:4px;text-align:center;">${paperChartMode==='模考'?'绿色=国考 蓝色=广东省考 灰=未标注类型':'按卷别分色：县级卷 / 乡镇卷 / 事业编 / 国考各卷（灰=未标注）'}（按考试日期排序）</div>
     </div>`:''}`;
   if(all.length) renderPaperChart();
 }
@@ -4520,13 +4520,13 @@ function setPaperChartMode(m){
   const titleCnt=document.getElementById('paperChartCount');
   if(titleCnt) titleCnt.textContent=m+' '+cnt+'次';
   const note=document.getElementById('paperChartNote');
-  if(note) note.textContent=(m==='模考'?'绿色=国考 蓝色=广东省考 灰=未标注类型':'按卷别分色：县级卷 / 乡镇卷 / 国考各卷（灰=未标注）')+'（按考试日期排序）';
+  if(note) note.textContent=(m==='模考'?'绿色=国考 蓝色=广东省考 灰=未标注类型':'按卷别分色：县级卷 / 乡镇卷 / 事业编 / 国考各卷（灰=未标注）')+'（按考试日期排序）';
   renderPaperChart();
 }
 /* v2.3.35：真题卷别（用户：「真题有的是广东县级卷有的是乡镇卷」）。
    下拉固定这几类 + 其他；旧数据没有该字段 → 筛选时归「其他」。
    v2.3.40 起同时决定真题曲线的线条顺序，故上移到曲线函数之前声明。 */
-const PAPER_KINDS=['广东省考·县级卷','广东省考·乡镇卷','国考·副省级','国考·地市级','国考·行政执法','其他'];
+const PAPER_KINDS=['广东省考·县级卷','广东省考·乡镇卷','广东事业编','国考·副省级','国考·地市级','国考·行政执法','其他'];
 /* v2.3.40：曲线分组键 —— 真题按「卷别」、模考按「考试类型」。
    v2.3.39 真题按考试主体（国考/广东省考）分线，可真题清一色广东省考 → 全挤成一条，
    用户反馈「真题试卷曲线没有分类」。卷别才是真题之间真正的差异（县级卷/乡镇卷/副省级…）。 */
@@ -4534,7 +4534,8 @@ function paperGroupOf(p){
   if(p.type==='真题') return p.kind||'其他';
   return p.examType||'其他';
 }
-/* 线条配色：按出现顺序取色，最多 6 条；超出循环复用 */
+/* 线条配色：按出现顺序取色，最多 8 条；超出循环复用
+   v2.3.46：卷别新增「广东事业编」，7 类卷别 + 其他会挤到第 7 条，补两个色免得循环串色 */
 const PAPER_LINE_COLORS=[
   {c:'#4a7bb5',f:'rgba(74,123,181,.08)'},
   {c:'#c08552',f:'rgba(192,133,82,.08)'},
@@ -4542,6 +4543,8 @@ const PAPER_LINE_COLORS=[
   {c:'#8a6bb5',f:'rgba(138,107,181,.08)'},
   {c:'#b55a7b',f:'rgba(181,90,123,.08)'},
   {c:'#9aa79a',f:'rgba(154,167,154,.08)'},
+  {c:'#2f8f8f',f:'rgba(47,143,143,.08)'},
+  {c:'#c9a227',f:'rgba(201,162,39,.08)'},
 ];
 function renderPaperChart(){
   /* v2.3.39：曲线按「模考 / 真题」分开画（用户：「现在都画在一起没有区分度」）。
@@ -4651,7 +4654,7 @@ function paperModal(id){
     </div>
     <div class="form-row" id="pp_kind_row" style="${isMk?'display:none;':''}">
       <div class="form-group"><label>卷别</label><select id="pp_kind"><option value="" ${!p||!p.kind?'selected':''}>未选择</option>${PAPER_KINDS.map(t=>`<option value="${t}" ${p&&p.kind===t?'selected':''}>${t}</option>`).join('')}</select></div>
-      <div class="form-group"><label>说明</label><div style="font-size:11px;color:var(--text-light);padding-top:6px;">真题可细分县级卷/乡镇卷/副省级等，试卷分析里能按卷别筛选</div></div>
+      <div class="form-group"><label>说明</label><div style="font-size:11px;color:var(--text-light);padding-top:6px;">真题可细分县级卷/乡镇卷/事业编/副省级等，试卷分析里能按卷别筛选</div></div>
     </div>
     <div class="form-group">
       <label>各模块做题情况（正确数 / 总数 / 用时，正确率自动计算）</label>
@@ -8082,7 +8085,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.3.45';
+const APP_VERSION='v2.3.46';
 /* v2.3.34：飞书应用凭证来自「设置 → 飞书应用」（存 DB.settings，随云端同步）。
    ⚠️ 切勿把它明文写进本文件：① 本页源码是公开的；② GitHub 的 secret scanning
    会直接拒绝含 LARK_APP_SECRET 的推送（实测 409 Secret detected in content）。 */
