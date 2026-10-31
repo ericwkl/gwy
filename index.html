@@ -702,9 +702,16 @@ function renderHome(){
      少按一次「确定」，计时才不掺键盘操作的时间
    ============================================================ */
 /* v2.3.47：题型由「一位数加减」扩到六种 —— 加减/加/减 + 百化分/平方数/凑千法，
-   后三类对标用户《资料分析默写表格》，练的是把百分数↔分数、平方、除转乘直接背出来。 */
+   后三类对标用户《资料分析默写表格》，练的是把百分数↔分数、平方、除转乘直接背出来。
+   v2.3.48：专项题型加「方向」—— 正 / 反 / 交替（一正一反成对），百分点换算可双向背。
+   v2.3.49：一组内不重复（洗牌袋）、平方数删 21²~29²、凑千法题面改成「167 × ? ≈ 1000」。 */
 const MATH_MODE_GROUPS=[['加减','加','减'],['百化分','平方数','凑千法']];
 const MATH_MODES=[].concat.apply([],MATH_MODE_GROUPS);
+/* v2.3.48：方向可自选 —— 正=只出「分数→百分数」，反=只出「百分数→分数」，
+   交替=同一知识点先正后反成对出（背一张表时正反都要能换）。加减类无方向，忽略此项。 */
+const MATH_DRILL_MODES=['百化分','平方数','凑千法'];
+const MATH_DIRS=['正','反','交替'];
+const mathIsDrill=m=>MATH_DRILL_MODES.indexOf(m)>=0;
 /* 百化分池：[分数, 百分数, 分母] —— 数值照用户默写表（33.3/16.67/11.11 保留表里精度） */
 const MATH_PCT=[
   ['1/2',50,2],['1/3',33.3,3],['1/4',25,4],['3/4',75,4],['1/5',20,5],['2/5',40,5],
@@ -713,19 +720,21 @@ const MATH_PCT=[
   ['1/15',6.7,15],['1/16',6.25,16],['1/17',5.9,17],['1/18',5.6,18],['1/19',5.3,19],['1/20',5,20],
   ['1/24',4.2,24],['1/27',3.7,27],['2/3',66.7,3],['3/10',30,10],
 ];
-/* 平方数池：11²~29² + 1.2²/1.3²/1.4²（表里带小数的三条，年均增长率里常用） */
+/* 平方数池：11²~20² + 1.2²/1.3²/1.4²（表里带小数的三条，年均增长率里常用）
+   v2.3.49：按用户要求删掉 21²~29²，只留 11~20 */
 const MATH_SQ=[[11,121],[12,144],[13,169],[14,196],[15,225],[16,256],[17,289],[18,324],[19,361],
-  [20,400],[21,441],[22,484],[23,529],[24,576],[25,625],[26,676],[27,729],[28,784],[29,841],
-  [1.2,1.44],[1.3,1.69],[1.4,1.96]];
-/* 凑千法池：[除数, 配凑系数] —— 除数 × 系数 ≈ 1000（143×7=1001、167×6=1002、333×3=999、111×9=999） */
+  [20,400],[1.2,1.44],[1.3,1.69],[1.4,1.96]];
+/* 凑千法池：[除数, 配凑系数] —— 除数 × 系数 ≈ 1000（143×7=1001、167×6=1002、333×3=999、111×9=999）
+   v2.3.49：题面改成直白的「×? ≈ 1000」，原来写「÷167 ＝ ×? ÷1000」太绕，看不懂 */
 const MATH_K=[['125',8],['143',7],['167',6],['250',4],['333',3],['500',2],['111',9]];
 
 function mathDrills(){ if(!Array.isArray(DB.mathDrills)) DB.mathDrills=[]; return DB.mathDrills; }
 function mathCfg(){
   const c=DB.mathDrillCfg;
-  if(!c||typeof c!=='object') DB.mathDrillCfg={count:20,mode:'加减'};
+  if(!c||typeof c!=='object') DB.mathDrillCfg={count:20,mode:'加减',dir:'交替'};
   if([10,20,30,50,100].indexOf(DB.mathDrillCfg.count)<0) DB.mathDrillCfg.count=20;
   if(MATH_MODES.indexOf(DB.mathDrillCfg.mode)<0) DB.mathDrillCfg.mode='加减';
+  if(MATH_DIRS.indexOf(DB.mathDrillCfg.dir)<0) DB.mathDrillCfg.dir='交替';
   return DB.mathDrillCfg;
 }
 function mathTodayStat(){
@@ -753,72 +762,145 @@ function mathCardHtml(){
       <span style="font-size:10px;color:var(--text-light);">加减 · 百化分 · 平方数 · 凑千法</span></div>
     <div class="tag-list" style="gap:5px;margin:0 0 6px;">
       <span style="font-size:11px;color:var(--text-soft);align-self:center;">每组</span>
-      ${[10,20,30,50,100].map(n=>chip(n+'题',cfg.count===n,`setMathCfg('count',${n})`)).join('')}
+      ${[10,20,30,50,100].map(n=>{
+        /* 超容量的档位淡化；但容量本身不足最小档（如凑千法 7 条）时全亮，否则整行都是灰的没法点 */
+        const over=mathIsDrill(cfg.mode)&&mathCap()>=10&&n>mathCap();
+        return `<span class="tag ${cfg.count===n?'on':''}" style="cursor:pointer;${over?'opacity:.4;':''}" onclick="setMathCfg('count',${n})">${n}题</span>`;
+      }).join('')}
     </div>
-    ${MATH_MODE_GROUPS.map((g,gi)=>`<div class="tag-list" style="gap:5px;margin:0 0 ${gi===MATH_MODE_GROUPS.length-1?8:6}px;">
+    ${MATH_MODE_GROUPS.map((g,gi)=>`<div class="tag-list" style="gap:5px;margin:0 0 6px;">
       <span style="font-size:11px;color:var(--text-soft);align-self:center;">${gi===0?'题型':'专项'}</span>
       ${g.map(m=>chip(m,cfg.mode===m,`setMathCfg('mode','${m}')`)).join('')}
     </div>`).join('')}
+    ${mathIsDrill(cfg.mode)?`<div class="tag-list" style="gap:5px;margin:0 0 8px;">
+      <span style="font-size:11px;color:var(--text-soft);align-self:center;">方向</span>
+      ${MATH_DIRS.map(d=>chip(d,cfg.dir===d,`setMathCfg('dir','${d}')`)).join('')}
+      <span style="font-size:10px;color:var(--text-light);align-self:center;">${
+        ({'正':'只问 分数→百分数','反':'只问 百分数→分数','交替':'一正一反成对出'})[cfg.dir]||''}</span>
+    </div>`:''}
+    ${(mathIsDrill(cfg.mode)&&mathPool(cfg.mode)&&cfg.count>mathCap())
+      ? `<div style="font-size:10px;color:var(--text-light);margin:-4px 0 6px;">题库共 ${mathPool(cfg.mode).length} 条，一组按 ${mathGroupSize()} 题出不重复${cfg.dir==='交替'?'（正是交替翻倍后）':''}</div>`
+      : ''}
     <div style="font-size:12px;color:var(--text);line-height:1.7;">
       ${st?`今日 <b>${st.n}</b> 题 · 平均 <b>${(st.avg/1000).toFixed(1)}s</b> · 正确率 <b>${st.acc}%</b>`
           :'<span style="color:var(--text-light);">今日还没练</span>'}
       ${best?`<div style="font-size:11px;color:var(--text-light);">最佳平均 ${(best.avgMs/1000).toFixed(1)}s（${best.count} 题）</div>`:''}
     </div>
-    <button class="btn btn-full" style="margin-top:8px;" onclick="startMathDrill()">开始 ${cfg.count} 题</button>
+    <button class="btn btn-full" style="margin-top:8px;" onclick="startMathDrill()">开始 ${mathGroupSize()} 题</button>
   </div>`;
 }
 function refreshMathCard(){ const h=document.getElementById('mathCardHost'); if(h) h.innerHTML=mathCardHtml(); }
+/* v2.3.49：一组题数不超过题库容量 —— 专项题池子小（凑千法 7 条），选 20 题只能重复三轮。
+   交替模式一对消耗 1 个知识点，容量翻倍。加减没有池子上限。 */
+function mathCap(){
+  const c=mathCfg(), pool=mathPool(c.mode);
+  if(!pool||!pool.length) return c.count;
+  return pool.length * (c.dir==='交替'?2:1);
+}
+function mathGroupSize(){
+  const c=mathCfg();
+  return Math.min(c.count, mathCap());
+}
 function setMathCfg(k,v){ mathCfg()[k]=v; saveDB(); refreshMathCard(); }
 
 let _md=null;
+/* v2.3.49：一组内不重复 —— 每轮把知识点洗牌后按顺序取，取完再洗一遍（洗牌袋）。
+   原来纯随机，13 条池子出 20 题必然撞车，同一组里同一个数能出现三四次。 */
+function mathPool(mode){
+  if(mode==='百化分') return MATH_PCT;
+  if(mode==='平方数') return MATH_SQ;
+  if(mode==='凑千法') return MATH_K;
+  return null;
+}
+function mathShuffle(a){
+  for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); const t=a[i]; a[i]=a[j]; a[j]=t; }
+  return a;
+}
+function mathNextItem(mode){
+  const pool=mathPool(mode);
+  if(!pool||!pool.length) return null;
+  if(!_md.bag || _md.bagMode!==mode){
+    _md.bag=mathShuffle(pool.map((_,i)=>i));
+    _md.bagMode=mode; _md.bagLast=-1;
+  }
+  if(!_md.bag.length){
+    _md.bag=mathShuffle(pool.map((_,i)=>i));
+    /* 跨轮边界：新一轮第一题别接上一轮最后一题 */
+    if(_md.bag.length>1 && _md.bag[0]===_md.bagLast){ const t=_md.bag[0]; _md.bag[0]=_md.bag[1]; _md.bag[1]=t; }
+  }
+  const idx=_md.bag.shift();
+  _md.bagLast=idx;
+  return pool[idx];
+}
 /* v2.3.47：每题返回 {text, disp, ans, fs}
-   text = 纯文本题干（汇总列表用）、disp = 大字题面 HTML、fs = 字号、rev = 反向题（答案不是等号右边那个数） */
-function buildMathQ(mode){
+   text = 纯文本题干（汇总列表用）、disp = 大字题面 HTML、fs = 字号、rev = 反向题（答案不是等号右边那个数）
+   v2.3.48：opt={rev, force} —— rev 指定方向，force 指定池子条目（交替模式配对用） */
+function buildMathQ(mode, opt){
+  opt=opt||{};
+  const rev=!!opt.rev;
   if(mode==='百化分'){
-    const it=MATH_PCT[Math.floor(Math.random()*MATH_PCT.length)];
-    const frac=it[0], pct=it[1], den=it[2];
-    // 反向只出 1/n 型（问分母），2/3、3/4 这类分子问出来等于送分
-    if(/^1\//.test(frac) && Math.random()<0.35){
-      return {key:'pct:'+frac, text:`${pct}% = 1/?`, disp:`${pct}% <span style="color:var(--text-light);">=</span> 1/?`, ans:den, fs:40, rev:true};
+    const it=opt.force||MATH_PCT[Math.floor(Math.random()*MATH_PCT.length)];
+    const frac=it[0], pct=it[1], den=it[2], num=Number(frac.split('/')[0]);
+    /* 反向：1/n 型问分母（4.2% = 1/? → 24）；2/7 这类问分子（28.6% ≈ ?/7 → 2），
+       这样每个知识点正反都换得过来，不会只剩 1/n 能背 */
+    if(rev){
+      if(num===1) return {key:'pct:'+frac, it, rev:true, text:`${pct}% = 1/?`, disp:`${pct}% <span style="color:var(--text-light);">=</span> 1/?`, ans:den, fs:40};
+      return {key:'pct:'+frac, it, rev:true, text:`${pct}% ≈ ?/${den}`, disp:`${pct}% <span style="color:var(--text-light);">≈</span> ?/${den}`, ans:num, fs:40};
     }
-    return {key:'pct:'+frac, text:`${frac} ≈ ? %`, disp:`${frac} <span style="color:var(--text-light);">≈</span> ? %`, ans:pct, fs:44};
+    return {key:'pct:'+frac, it, text:`${frac} ≈ ? %`, disp:`${frac} <span style="color:var(--text-light);">≈</span> ? %`, ans:pct, fs:44};
   }
   if(mode==='平方数'){
-    const it=MATH_SQ[Math.floor(Math.random()*MATH_SQ.length)];
-    if(Math.random()<0.25){
-      return {key:'sq:'+it[0], text:`?² = ${it[1]}`, disp:`?<sup style="font-size:.55em;">2</sup> <span style="color:var(--text-light);">=</span> ${it[1]}`, ans:it[0], fs:40, rev:true};
+    const it=opt.force||MATH_SQ[Math.floor(Math.random()*MATH_SQ.length)];
+    if(rev){
+      return {key:'sq:'+it[0], it, rev:true, text:`?² = ${it[1]}`, disp:`?<sup style="font-size:.55em;">2</sup> <span style="color:var(--text-light);">=</span> ${it[1]}`, ans:it[0], fs:40};
     }
-    return {key:'sq:'+it[0], text:`${it[0]}²`, disp:`${it[0]}<sup style="font-size:.55em;">2</sup> <span style="color:var(--text-light);">=</span>`, ans:it[1], fs:46};
+    return {key:'sq:'+it[0], it, text:`${it[0]}²`, disp:`${it[0]}<sup style="font-size:.55em;">2</sup> <span style="color:var(--text-light);">=</span>`, ans:it[1], fs:46};
   }
   if(mode==='凑千法'){
-    const it=MATH_K[Math.floor(Math.random()*MATH_K.length)];
-    if(Math.random()<0.4){
-      return {key:'k:'+it[0], text:`×${it[1]} ÷1000 ＝ ÷?`, disp:`×${it[1]} ÷1000 <span style="color:var(--text-light);">＝</span> ÷?`, ans:Number(it[0]), fs:34, rev:true};
+    const it=opt.force||MATH_K[Math.floor(Math.random()*MATH_K.length)];
+    /* v2.3.49：题面直白化 —— 就是「这个数乘几约等于 1000」，原来那条「÷167 ＝ ×? ÷1000」没人看得懂 */
+    if(rev){
+      return {key:'k:'+it[0], it, rev:true, text:`? × ${it[1]} ≈ 1000`, disp:`? × ${it[1]} <span style="color:var(--text-light);">≈</span> 1000`, ans:Number(it[0]), fs:38};
     }
-    return {key:'k:'+it[0], text:`÷${it[0]} ＝ ×? ÷1000`, disp:`÷${it[0]} <span style="color:var(--text-light);">＝</span> ×? ÷1000`, ans:it[1], fs:34};
+    return {key:'k:'+it[0], it, text:`${it[0]} × ? ≈ 1000`, disp:`${it[0]} × ? <span style="color:var(--text-light);">≈</span> 1000`, ans:it[1], fs:38};
   }
   const op = mode==='加'?'+':(mode==='减'?'-':(Math.random()<0.5?'+':'-'));
   let a=1+Math.floor(Math.random()*9), b=1+Math.floor(Math.random()*9);
   if(op==='-' && a<b){ const t=a; a=b; b=t; }
   return {key:`${a}${op}${b}`, text:`${a} ${op} ${b}`, disp:`${a} ${op} ${b} <span style="color:var(--text-light);">=</span>`, ans:op==='+'?a+b:a-b, fs:46};
 }
-function mathNewQ(mode,prev){
+function mathNewQ(mode, prev, rev, force){
   /* v2.3.47：按 key 去重 —— 平方数「1.3²」和「?²=1.69」是同一道题，正反向连着出会像卡住 */
+  if(force) return buildMathQ(mode, {rev:!!rev, force});
   let q=null;
-  for(let i=0;i<12;i++){ q=buildMathQ(mode); if(!prev||(prev.key||prev.text)!==(q.key||q.text)) break; }
+  for(let i=0;i<12;i++){ q=buildMathQ(mode, {rev:!!rev}); if(!prev||(prev.key||prev.text)!==(q.key||q.text)) break; }
   return q;
 }
 function startMathDrill(){
   const cfg=mathCfg();
-  _md={count:cfg.count, mode:cfg.mode, idx:0, items:[], cur:null, t0:0, locked:false, tick:null, last:null};
-  openModal(`<div class="modal-head"><h3>⚡ 速算 · ${cfg.mode}</h3><button class="modal-close" onclick="endMathDrill()">✕</button></div>
+  _md={count:mathGroupSize(), mode:cfg.mode, dir:cfg.dir, idx:0, items:[], cur:null, t0:0, locked:false, tick:null, last:null,
+       bag:null, bagMode:'', bagLast:-1};
+  const dsub=mathIsDrill(cfg.mode)?` · ${cfg.dir}`:'';
+  openModal(`<div class="modal-head"><h3>⚡ 速算 · ${cfg.mode}${dsub}</h3><button class="modal-close" onclick="endMathDrill()">✕</button></div>
     <div id="mdBody"></div>`);
   nextMathQuestion();
 }
 function nextMathQuestion(){
   if(!_md) return;
   if(_md.idx>=_md.count){ endMathDrill(); return; }
-  const q=mathNewQ(_md.mode,_md.last);
+  /* v2.3.48：方向由 cfg.dir 决定；「交替」时同一知识点先正后反，反向题强制复用上一题的池子条目
+     v2.3.49：正向题一律从洗牌袋取，一组内不重复 */
+  let rev=false, force=null, prev=_md.last;
+  if(mathIsDrill(_md.mode)){
+    const dir=_md.dir||'交替';
+    if(dir==='反') rev=true;
+    else if(dir==='交替'){
+      rev=(_md.idx%2===1);
+      if(rev && _md.last && _md.last.it) force=_md.last.it;
+    }
+    if(!force) force=mathNextItem(_md.mode);
+  }
+  const q=mathNewQ(_md.mode, prev, rev, force);
   _md.cur=q; _md.last=q; _md.t0=performance.now(); _md.locked=false;
   const body=document.getElementById('mdBody');
   if(!body) return;
@@ -886,17 +968,18 @@ function endMathDrill(){
   clearInterval(_md&&_md.tick);
   const items=_md?_md.items.slice():[];
   const mode=_md?(_md.mode||'加减'):'加减';
+  const dir=_md?(_md.dir||''):'';
   _md=null;
   if(!items.length){ closeModal(); return; }
-  finishMathDrill(items, mode);
+  finishMathDrill(items, mode, dir);
 }
-function finishMathDrill(items, mode){
+function finishMathDrill(items, mode, dir){
   const total=items.reduce((a,x)=>a+x.ms,0);
   const correct=items.filter(x=>x.ok).length;
   const avg=total/items.length;
   const best=Math.min.apply(null,items.map(x=>x.ms));
   const worst=Math.max.apply(null,items.map(x=>x.ms));
-  const rec={id:uid(),ts:Date.now(),date:todayStr(),count:items.length,correct,mode:mode||'加减',
+  const rec={id:uid(),ts:Date.now(),date:todayStr(),count:items.length,correct,mode:mode||'加减',dir:dir||'',
     totalMs:total,avgMs:Math.round(avg),bestMs:best,worstMs:worst,items};
   mathDrills().push(rec);
   if(mathDrills().length>60) DB.mathDrills=DB.mathDrills.slice(-60); // 只留最近 60 组，避免同步体积膨胀
@@ -908,7 +991,7 @@ function finishMathDrill(items, mode){
       <span style="color:${x.ok?'var(--text-light)':'var(--danger)'};font-size:11px;">${x.ok?'✓':'✗'}</span>
       <span style="width:52px;text-align:right;color:var(--text-light);font-size:11px;">${(x.ms/1000).toFixed(2)}s</span>
     </div>`).join('');
-  openModal(`<div class="modal-head"><h3>本组完成${mode?' · '+mode:''}</h3><button class="modal-close" onclick="closeMathSummary()">✕</button></div>
+  openModal(`<div class="modal-head"><h3>本组完成${mode&&mode!=='加减'?' · '+mode+(dir?' '+dir:''):''}</h3><button class="modal-close" onclick="closeMathSummary()">✕</button></div>
     <div style="display:flex;gap:8px;text-align:center;margin:2px 0 10px;">
       <div style="flex:1;background:var(--bg-soft);border-radius:10px;padding:8px 4px;">
         <div style="font-size:20px;font-weight:700;color:var(--primary);">${(avg/1000).toFixed(1)}s</div>
@@ -8141,7 +8224,7 @@ function restoreScrollPos(page){
 }
 /* v2.2.64：页面版本号收敛为单一常量（方案A），顶部徽章/设置页footer均引用 APP_VERSION，
    改版本号只需改这一处，不再 grep 多处硬编码 */
-const APP_VERSION='v2.3.47';
+const APP_VERSION='v2.3.49';
 /* v2.3.34：飞书应用凭证来自「设置 → 飞书应用」（存 DB.settings，随云端同步）。
    ⚠️ 切勿把它明文写进本文件：① 本页源码是公开的；② GitHub 的 secret scanning
    会直接拒绝含 LARK_APP_SECRET 的推送（实测 409 Secret detected in content）。 */
